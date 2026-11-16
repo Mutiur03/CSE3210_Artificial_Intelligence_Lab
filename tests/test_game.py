@@ -278,7 +278,7 @@ def test_fog_never_leaks_in_real_games() -> None:
                 assert (obs.opp_pos is None) == (d > C.VISION_RADIUS)
                 assert obs.bruno is None or obs.bruno[0] in obs.visible_cells
                 assert all(s.maze.dist(obs.self_pos, c) <= 5 for c in obs.visible_cells)
-            run_round(s, lambda o: a.act(o).action, lambda o: b.act(o).action)
+            run_round(s, lambda o, a=a: a.act(o).action, lambda o, b=b: b.act(o).action)
 
 
 def test_last_seen_ages() -> None:

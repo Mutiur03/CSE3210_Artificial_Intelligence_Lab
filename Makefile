@@ -4,7 +4,7 @@ VENV_PY := $(firstword $(wildcard .venv/Scripts/python.exe .venv/bin/python) .ve
 PYTHON ?= python
 PY := $(if $(wildcard $(VENV_PY)),$(VENV_PY),$(PYTHON))
 
-.PHONY: setup deps test lint run
+.PHONY: setup deps test lint run bench
 
 setup:
 	$(PYTHON) -m venv .venv
@@ -21,3 +21,6 @@ lint:
 
 run:
 	$(PY) main.py
+
+bench:
+	$(PY) scripts/bench_search.py

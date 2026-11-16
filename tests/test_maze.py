@@ -4,7 +4,7 @@ import pytest
 
 import config as C
 from maze import INF, generate_maze, validate
-from search import bfs_distances, bidirectional_bfs
+from search import bfs_distance_map, bidirectional_bfs
 
 
 def check_rules(m) -> None:
@@ -69,7 +69,7 @@ def test_bidirectional_matches_bfs() -> None:
     for goal in cells[::7]:
         res = bidirectional_bfs(m.adj, m.jerry_start, goal)
         assert res.path[0] == m.jerry_start and res.path[-1] == goal
-        assert len(res.path) - 1 == bfs_distances(m.adj, m.jerry_start)[goal]
+        assert len(res.path) - 1 == bfs_distance_map(m.adj, m.jerry_start)[goal]
         assert all(b in m.adj[a] for a, b in zip(res.path, res.path[1:], strict=False))
         assert res.meeting in res.path
 

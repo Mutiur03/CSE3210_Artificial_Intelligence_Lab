@@ -6,7 +6,7 @@ import random
 from dataclasses import dataclass, field
 
 import config as C
-from search import Cell, bfs_distances, bidirectional_bfs
+from search import Cell, bfs_distance_map, reachable
 
 INF = 10**9
 
@@ -43,7 +43,7 @@ class Maze:
     def dist_map(self, src: Cell) -> dict[Cell, int]:
         """BFS distance map from `src` (cached)."""
         if src not in self._dist_cache:
-            self._dist_cache[src] = bfs_distances(self.adj, src)
+            self._dist_cache[src] = bfs_distance_map(self.adj, src)
         return self._dist_cache[src]
 
     def dist(self, a: Cell, b: Cell) -> int:
@@ -119,7 +119,7 @@ def _place(floor: frozenset[Cell], size: int, rng: random.Random) -> dict | None
     tom_zone = [p for p in cells if p[0] >= size - band and p[1] >= size - band]
     adj = {cell: neighbours(floor, cell) for cell in floor}
     jerry, tom = rng.choice(jerry_zone), rng.choice(tom_zone)
-    if bfs_distances(adj, jerry).get(tom, INF) < C.MIN_START_DISTANCE:
+    if bfs_distance_map(adj, jerry).get(tom, INF) < C.MIN_START_DISTANCE:
         return None
     pool = [p for p in cells if p not in (jerry, tom)]
     rng.shuffle(pool)
@@ -128,7 +128,7 @@ def _place(floor: frozenset[Cell], size: int, rng: random.Random) -> dict | None
     for cand in pool:
         if all(m.get(cand, INF) >= C.MIN_KEY_SEPARATION for m in key_maps):
             keys.append(cand)
-            key_maps.append(bfs_distances(adj, cand))
+            key_maps.append(bfs_distance_map(adj, cand))
             if len(keys) == C.NUM_KEYS:
                 break
     if len(keys) < C.NUM_KEYS:
@@ -142,7 +142,7 @@ def validate(maze: Maze) -> bool:
     """Every key, exit and kennel reachable from both start cells (bidirectional BFS)."""
     targets = [*maze.keys, maze.exit, maze.kennel]
     return all(
-        bidirectional_bfs(maze.adj, start, t).path
+        reachable(maze.adj, start, t)
         for start in (maze.jerry_start, maze.tom_start)
         for t in targets
     )

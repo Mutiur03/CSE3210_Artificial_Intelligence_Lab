@@ -25,7 +25,7 @@ def play_games(n: int, size: int = 21, bruno: bool = True) -> dict:
         state = new_game(generate_maze(seed, size), bruno)
         jerry, tom = RandomAgent(seed * 2), RandomAgent(seed * 2 + 1)
         while state.winner is None:
-            run_round(state, lambda o: jerry.act(o).action, lambda o: tom.act(o).action)
+            run_round(state, lambda o, j=jerry: j.act(o).action, lambda o, t=tom: t.act(o).action)
             summary["errors"] += [f"seed {seed} turn {state.turn}: {e}"
                                   for e in invariant_errors(state)]
         summary["jerry_wins" if state.winner == JERRY else "tom_wins"] += 1
