@@ -1,0 +1,20 @@
+# Whitelist: ignore everything, then allow only game files.
+*
+!*/
+
+# game code (engine, UI, scripts, tests)
+!*.py
+
+# needed to install and run the game
+!requirements.txt
+!pyproject.toml
+!Makefile
+!run.sh
+!run.bat
+!.gitignore
+
+# never commit environments or caches, even .py files inside them
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
