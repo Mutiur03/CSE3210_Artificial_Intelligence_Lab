@@ -255,3 +255,30 @@ def decide(state: GameState, player: str, depth: int = C.MINIMAX_DEPTH,
                       "nodes": total, "chosen": best.action, "root_player": player,
                       "value": best.value, "tree": best_tree}
     return best
+
+
+@dataclass
+class RootMove:
+    """Exact minimax value of one root action (see `root_moves`)."""
+
+    action: str
+    value: float
+    nodes: int
+    terms: dict  # static-evaluation terms of the principal-variation leaf
+    pv: list[tuple[str, str, Cell, Cell]]
+
+
+def root_moves(state: GameState, player: str, depth: int = C.MINIMAX_DEPTH) -> list[RootMove]:
+    """Search every root action with a full alpha-beta window, so each value is exact.
+
+    `decide` only bounds the moves it prunes; this gives the true value, principal
+    variation and leaf evaluation terms of each, for the worked tables of the
+    scenario report. Where used: scenario.py.
+    """
+    out = []
+    for action, child in children(state, player):
+        s = _Search(depth, True, None, None, False)
+        val, terms, pv = s.value(child, other(player), 1, -math.inf, math.inf, None, action)
+        out.append(RootMove(action, val, s.nodes, terms, [(player, action, child.tom,
+                                                          child.jerry)] + pv))
+    return out
