@@ -11,8 +11,10 @@ LOOP_WALL_FRACTION = 0.08  # share of removable interior walls knocked out for l
 NUM_KEYS = 3
 MIN_START_DISTANCE = 16  # path distance Jerry start <-> Tom start
 MIN_KEY_SEPARATION = 6  # pairwise path distance between keys
+MAX_KEY_TOUR = 70  # fairness: best start -> 3 keys -> exit walk, leaves 50 turns to spare
 START_REGION_DIVISOR = 3  # start regions = outer size//3 band of each corner
 MAX_MAZE_ATTEMPTS = 1000  # derived seeds tried before giving up
+PLACEMENT_TRIES = 20  # feature placements tried on one carved maze
 
 # ---------------------------------------------------------------- rules (3.2-3.7)
 TURN_LIMIT = 120
@@ -43,6 +45,16 @@ MCTS_PLAYOUT_TURNS = 20
 MCTS_REPLAN_TURNS = 5
 DLS_DEPTH = 5
 CLOSE_RANGE = 4
+# agent mode details (4.5)
+SWEEP_STALE_TURNS = 20  # Tom SWEEP: a cell not seen for this many turns counts as unseen
+JERRY_MEMORY_TURNS = 6  # Jerry uses Tom's last seen cell for at most this many turns
+RISK_RADIUS = 6  # risk(cell) = max(0, RISK_RADIUS - d_tom(cell)) / RISK_RADIUS
+RISK_WEIGHT = 4  # Jerry A* entry cost = 1 + RISK_WEIGHT * risk (+ dead-end cost)
+DEAD_END_COST = 3
+DEAD_END_ALERT_DIST = 8  # dead-end cost applies while Tom is within this distance
+EVADE_FLOOD_WEIGHT = 0.5
+EVADE_DEAD_END_PENALTY = 5
+BRUNO_FEAR_RANGE = 8  # Tom fuzzy input bruno = max(0, 1 - d(Bruno, Tom) / 8)
 # minimax evaluation weights (4.6), Tom perspective
 W_DIST = -10
 W_GOAL = 2

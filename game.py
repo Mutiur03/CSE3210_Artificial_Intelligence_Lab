@@ -50,6 +50,7 @@ class GameState:
     tom: Cell
     keys: tuple[Cell, ...]  # keys still on the board
     bruno: Bruno | None
+    exit: Cell | None = None  # exit cell as the simulating side knows it (None = unknown)
     keys_taken: int = 0
     exit_open: bool = False
     tom_stun: int = 0
@@ -71,6 +72,7 @@ class GameState:
             bruno=None if b is None else Bruno(
                 b.pos, b.state, b.guard_timer, b.tired_timer, b.bite_cooldown, b.activations
             ),
+            exit=self.exit,
             keys_taken=self.keys_taken, exit_open=self.exit_open, tom_stun=self.tom_stun,
             turn=self.turn, winner=self.winner, reason=self.reason, bites=self.bites,
             last_seen=dict(self.last_seen),
@@ -108,7 +110,7 @@ def new_game(maze: Maze, bruno_enabled: bool = True) -> GameState:
     """Fresh game on `maze`: Bruno asleep in the kennel, all keys on the board."""
     state = GameState(
         maze=maze, jerry=maze.jerry_start, tom=maze.tom_start, keys=tuple(maze.keys),
-        bruno=Bruno(maze.kennel) if bruno_enabled else None,
+        bruno=Bruno(maze.kennel) if bruno_enabled else None, exit=maze.exit,
     )
     _update_sightings(state)
     return state
@@ -131,6 +133,14 @@ def moves_from(maze: Maze, cell: Cell) -> list[str]:
 def step(cell: Cell, action: str) -> Cell:
     dr, dc = C.DELTAS[action]
     return (cell[0] + dr, cell[1] + dc)
+
+
+def direction(src: Cell, dst: Cell) -> str:
+    """Action that moves from `src` to the adjacent cell `dst` (WAIT if they are equal)."""
+    for a in C.ACTIONS:
+        if step(src, a) == dst:
+            return a
+    raise ValueError(f"{dst} is not next to {src}")
 
 
 def legal_actions(state: GameState, role: str) -> list[str]:
@@ -169,8 +179,11 @@ def _update_sightings(state: GameState) -> None:
         state.last_seen[TOM] = (state.jerry, state.turn)
 
 
-def _toward(maze: Maze, src: Cell, goal: Cell) -> Cell:
-    """Next cell on a BFS shortest path src -> goal (first in UP/DOWN/LEFT/RIGHT order)."""
+def toward(maze: Maze, src: Cell, goal: Cell) -> Cell:
+    """Next cell on a BFS shortest path src -> goal (first in UP/DOWN/LEFT/RIGHT order).
+
+    Used by Bruno's FSM and by the cheap MCTS playout policies.
+    """
     if src == goal:
         return src
     dmap = maze.dist_map(goal)
@@ -215,8 +228,8 @@ def _jerry_lands(state: GameState, out: list[Event]) -> None:
         _emit(state, out, f"Jerry took a key ({state.keys_taken}/{C.NUM_KEYS})", frozenset(ROLES))
         if state.keys_taken == C.NUM_KEYS:
             state.exit_open = True
-            _emit(state, out, f"ALARM! Exit open at {state.maze.exit}", frozenset(ROLES))
-    if state.exit_open and cell == state.maze.exit:
+            _emit(state, out, f"ALARM! Exit open at {state.exit}", frozenset(ROLES))
+    if state.exit_open and cell == state.exit:
         _win(state, out, JERRY, "Jerry escaped through the exit")
         return
     b = state.bruno
@@ -252,7 +265,7 @@ def bruno_step(state: GameState) -> list[Event]:
         _emit(state, out, "Bruno chases Tom!", _witnesses(state, b.pos))
     if b.state == CHASE_CAT:
         if maze.dist(b.pos, state.tom) > C.BRUNO_BITE_RANGE:
-            b.pos = _toward(maze, b.pos, state.tom)
+            b.pos = toward(maze, b.pos, state.tom)
         d = maze.dist(b.pos, state.tom)
         if d <= C.BRUNO_BITE_RANGE and b.bite_cooldown == 0:
             state.tom_stun = C.BRUNO_BITE_STUN
@@ -265,9 +278,9 @@ def bruno_step(state: GameState) -> list[Event]:
             _emit(state, out, "Bruno lost Tom and returns to Jerry", _witnesses(state, b.pos))
     elif b.state == GUARD:
         if maze.dist(b.pos, state.jerry) > C.BRUNO_GUARD_FOLLOW_DIST:
-            b.pos = _toward(maze, b.pos, state.jerry)
+            b.pos = toward(maze, b.pos, state.jerry)
     elif b.state == TIRED:
-        b.pos = _toward(maze, b.pos, maze.kennel)
+        b.pos = toward(maze, b.pos, maze.kennel)
     return out
 
 
@@ -348,6 +361,28 @@ def make_observation(state: GameState, role: str) -> Observation:
         visible_cells=visible,
         events=tuple(e.text for e in state.events if e.turn >= since and role in e.audience),
         maze=maze,
+    )
+
+
+def belief_state(obs: Observation, opp_pos: Cell, bruno_activations: int = 0) -> GameState:
+    """A GameState built ONLY from `obs` (plus the agent's guess `opp_pos`).
+
+    Minimax and MCTS simulate on this local copy, never on the real state.
+    The opponent stands at `opp_pos`; Bruno exists only if visible (timers
+    unknown: assumed full); an exit the role does not know stays None, so a
+    simulated Jerry cannot escape through a cell Tom has not been told about.
+    """
+    jerry, tom = (obs.self_pos, opp_pos) if obs.role == JERRY else (opp_pos, obs.self_pos)
+    bruno = None
+    if obs.bruno is not None:
+        pos, st = obs.bruno
+        bruno = Bruno(pos, st, guard_timer=C.BRUNO_GUARD_TURNS if st in (GUARD, CHASE_CAT) else 0,
+                      tired_timer=C.BRUNO_TIRED_TURNS if st == TIRED else 0,
+                      activations=bruno_activations)
+    return GameState(
+        maze=obs.maze, jerry=jerry, tom=tom, keys=tuple(sorted(obs.key_cells)), bruno=bruno,
+        exit=obs.exit_cell, keys_taken=obs.keys_taken, exit_open=obs.exit_open,
+        tom_stun=obs.self_stun if obs.role == TOM else (obs.opp_stun or 0), turn=obs.turn,
     )
 
 

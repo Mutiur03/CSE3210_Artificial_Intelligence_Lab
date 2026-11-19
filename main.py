@@ -1,16 +1,20 @@
 """Cheese Heist entry point: menu, game loop, input.
 
-Run: python main.py [--seed N] [--size 21] [--no-bruno]
-Headless screenshot: python main.py --seed 190 --auto 46 --screenshot docs/screens/phase1.png
+Run: python main.py [--seed N] [--size 21] [--no-bruno] [--tom hard] [--jerry normal] [--trace]
+Headless screenshot: python main.py --seed 190 --auto 46 --screenshot docs/screens/x.png
+(all documentation screenshots: python scripts/screens.py)
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 if "--screenshot" in sys.argv:  # headless capture must pick drivers before pygame starts
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -20,126 +24,226 @@ import pygame  # noqa: E402
 
 import config as C  # noqa: E402
 import ui  # noqa: E402
-from agents import Decision, RandomAgent  # noqa: E402
+from agents import DIFFICULTIES, Decision, JerryAgent, RandomAgent, TomAgent, make_agent  # noqa: E402
+from demo import Demo  # noqa: E402
+from fuzzy import FuzzySystem, JerryController, TomController  # noqa: E402
 from game import (  # noqa: E402
     JERRY,
     TOM,
+    Event,
     GameState,
     Observation,
+    apply_action,
+    end_of_round,
     legal_actions,
     make_observation,
     new_game,
+    other,
     run_round,
 )
 from maze import generate_maze  # noqa: E402
 
+PLAY_JERRY, PLAY_TOM, WATCH = "PLAY_JERRY", "PLAY_TOM", "WATCH"
 MOVE_KEYS = {
     pygame.K_UP: "UP", pygame.K_w: "UP", pygame.K_DOWN: "DOWN", pygame.K_s: "DOWN",
     pygame.K_LEFT: "LEFT", pygame.K_a: "LEFT", pygame.K_RIGHT: "RIGHT", pygame.K_d: "RIGHT",
     pygame.K_SPACE: "WAIT",
 }
+SPEEDS = (1, 2, 4, 8, 16)  # spectator turns per second
 END_BUTTONS = ["Replay same seed (R)", "New game (N)", "Menu (M)"]
+TRACE_DIR = Path("results/traces")
+CONTROLLERS: dict[str, FuzzySystem] = {TOM: TomController(), JERRY: JerryController()}
 
 
 @dataclass
 class Session:
-    """One game: human Jerry vs AI Tom (RandomAgent in phase 1)."""
+    """One game in one mode. Holds the AI agents and their latest decisions."""
 
     seed: int
     size: int
     bruno: bool
+    mode: str
+    levels: dict[str, str]
+    trace: bool = False
     state: GameState = field(init=False)
-    tom: RandomAgent = field(init=False)
-    decision: Decision | None = None
+    agents: dict[str, TomAgent | JerryAgent] = field(init=False)
+    decisions: dict[str, Decision] = field(default_factory=dict)
     log: list[str] = field(default_factory=list)
-    tom_nodes: int = 0
+    nodes: dict[str, int] = field(default_factory=lambda: {TOM: 0, JERRY: 0})
+    saved: int = 0
 
     def __post_init__(self) -> None:
         self.state = new_game(generate_maze(self.seed, self.size), self.bruno)
-        self.tom = RandomAgent(self.seed)
+        self.agents = {r: make_agent(r, self.levels[r], self.seed * 2 + (r == TOM), self.trace)
+                       for r in (TOM, JERRY) if r != self.human}
+        if self.mode == PLAY_TOM:
+            self.jerry_then_wait()
 
-    def tom_policy(self, obs: Observation) -> str:
-        self.decision = self.tom.act(obs)
-        self.tom_nodes += self.decision.nodes
-        return self.decision.action
+    @property
+    def human(self) -> str | None:
+        return {PLAY_JERRY: JERRY, PLAY_TOM: TOM}.get(self.mode)
+
+    def set_trace(self, on: bool) -> None:
+        self.trace = on
+        for agent in self.agents.values():
+            agent.trace = on
+
+    def policy(self, role: str) -> Callable[[Observation], str]:
+        def act(obs: Observation) -> str:
+            d = self.agents[role].act(obs)
+            self.decisions[role] = d
+            self.nodes[role] += d.nodes
+            if self.trace and d.trace is not None:
+                TRACE_DIR.mkdir(parents=True, exist_ok=True)
+                path = TRACE_DIR / f"{self.seed}_{obs.turn}_{role}.json"
+                path.write_text(json.dumps(d.trace, indent=1), encoding="utf-8")
+                self.saved += 1
+            return d.action
+        return act
+
+    def record(self, events: list[Event]) -> None:
+        viewer = self.human
+        self.log += [f"T{e.turn}: {e.text}" for e in events if viewer is None or viewer in
+                     e.audience]
 
     def human_move(self, action: str) -> bool:
-        """Play one round with the human's action. False if the move is blocked."""
-        if action not in legal_actions(self.state, JERRY):
+        """Play the human's action. False if the move is blocked by a wall."""
+        role = self.human
+        if role is None or action not in legal_actions(self.state, role):
             return False
-        turn = self.state.turn
-        events = run_round(self.state, lambda _obs: action, self.tom_policy)
-        self.log += [f"T{turn}: {e.text}" for e in events if JERRY in e.audience]
+        if role == JERRY:
+            self.record(run_round(self.state, lambda _obs: action, self.policy(TOM)))
+        else:
+            self.record(apply_action(self.state, TOM, action))
+            self.record(end_of_round(self.state))
+            self.jerry_then_wait()
         return True
 
-    def panel(self) -> ui.PanelInfo:
-        obs = make_observation(self.state, JERRY)
-        d = self.decision
-        if obs.opp_pos is not None:
-            belief = f"Tom visible at {obs.opp_pos}"
-        elif obs.opp_last_seen is not None:
-            pos, seen = obs.opp_last_seen
-            belief = f"Tom last seen at {pos}, age {self.state.turn - seen}"
+    def jerry_then_wait(self) -> None:
+        """Human-Tom mode: the AI Jerry moves; while Tom is stunned his turns pass."""
+        while self.state.winner is None:
+            self.record(apply_action(self.state, JERRY, self.policy(JERRY)(
+                make_observation(self.state, JERRY))))
+            if self.state.winner is not None or self.state.tom_stun == 0:
+                return
+            self.record(apply_action(self.state, TOM, "WAIT"))
+            self.record(end_of_round(self.state))
+
+    def ai_round(self) -> None:
+        """Spectator: one full round, both sides AI."""
+        self.record(run_round(self.state, self.policy(JERRY), self.policy(TOM)))
+
+    # ---- panel content
+    def ai_view(self, role: str) -> ui.AIView:
+        d, agent = self.decisions.get(role), self.agents[role]
+        res = None
+        if d is not None and d.fuzzy_inputs is not None:
+            res = CONTROLLERS[role].evaluate(d.fuzzy_inputs)
+        opp = other(role).title()
+        if agent.last_seen is None:
+            belief = f"{opp} never seen"
         else:
-            belief = "Tom not seen yet"
+            cell, seen = agent.last_seen
+            age = self.state.turn - seen
+            belief = f"{opp} last known at {cell}, turn {seen} (age {age})"
+        if isinstance(agent, JerryAgent):
+            belief += f";  Bruno {agent.bruno_state.lower()} {agent.activations}/2"
+        if d is None:
+            return ui.AIView(role, agent.difficulty, "-", "waiting", 0, 0.0, None, belief)
+        return ui.AIView(role, agent.difficulty, d.mode, d.algorithm, d.nodes, d.ms, res, belief)
+
+    def bruno_lines(self) -> list[str]:
         b = self.state.bruno
         if b is None:
-            bruno = ["Disabled"]
-        elif obs.bruno is None:
-            bruno = ["Not in sight", f"Activations used: {b.activations}/2"]
-        else:
-            bruno = [f"State: {b.state}  at {b.pos}",
-                     f"Guard {b.guard_timer}  Tired {b.tired_timer}  Bite cd {b.bite_cooldown}",
-                     f"Activations used: {b.activations}/2"]
-        return ui.PanelInfo(
-            role=TOM, mode=d.mode if d else "-", algorithm=d.algorithm if d else "-",
-            nodes=d.nodes if d else 0, ms=d.ms if d else 0.0, belief=belief, bruno=bruno,
-            events=self.log,
-        )
+            return ["Disabled"]
+        viewer = self.human
+        if viewer is not None and make_observation(self.state, viewer).bruno is None:
+            return ["Not in sight"]
+        return [f"{b.state} at {b.pos}   activations {b.activations}/2",
+                f"guard {b.guard_timer}   tired {b.tired_timer}   bite cooldown {b.bite_cooldown}"]
 
     def stats(self) -> list[str]:
         s, b = self.state, self.state.bruno
+        nodes = [f"{r.title()} {self.nodes[r]}" if r in self.agents else f"{r.title()} human"
+                 for r in (TOM, JERRY)]
         return [
             f"Turns played: {min(s.turn, C.TURN_LIMIT)}",
             f"Keys collected: {s.keys_taken}/{C.NUM_KEYS}",
             f"Bruno activations: {b.activations if b else 0}   Bites: {s.bites}",
-            f"Nodes searched  Tom: {self.tom_nodes}   Jerry: human",
+            "Nodes searched:  " + "   ".join(nodes),
+            f"Tom {self.levels[TOM]}  vs  Jerry {self.levels[JERRY]}",
             f"Seed {self.seed}, size {self.size}",
         ]
 
 
 class App:
-    """Scene machine: 'menu' -> 'game' -> 'end'."""
+    """Scene machine: 'menu' -> 'game' -> 'end'; 'demo' and the help overlay on top."""
+
+    ACTIONS = ["Play as Jerry", "Play as Tom", "Watch AI vs AI", "Algorithm Demo",
+               "How to Play", "Quit"]
 
     def __init__(self, screen: pygame.Surface, args: argparse.Namespace) -> None:
         self.screen = screen
         self.fonts = ui.Fonts()
         self.size, self.seed, self.bruno = args.size, args.seed, not args.no_bruno
+        self.levels = {TOM: args.tom.upper(), JERRY: args.jerry.upper()}
+        self.trace = args.trace
         self.scene = "menu"
+        self.back_scene = "menu"
+        self.help = False
         self.selected = 0
         self.seed_buf: str | None = None
         self.session: Session | None = None
+        self.demo: Demo | None = None
         self.rects: list[pygame.Rect] = []
+        self.overlay = {"path": False, "explored": False}
+        self.fuzzy_role: str | None = None
+        self.paused = False
+        self.speed = 2  # index into SPEEDS
+        self.last_step = 0.0
         self.running = True
 
     # ---------------------------------------------------------- menu
-    def menu_items(self) -> list[str]:
+    def options(self) -> list[str]:
         seed = f"{self.seed_buf}_" if self.seed_buf is not None else str(self.seed)
-        return ["Play as Jerry", f"Map size: {self.size}", f"Seed: {seed}",
-                f"Bruno: {'On' if self.bruno else 'Off'}", "Quit"]
+        return [f"Tom: {self.levels[TOM]}", f"Jerry: {self.levels[JERRY]}",
+                f"Map size: {self.size}", f"Seed: {seed}",
+                f"Bruno: {'On' if self.bruno else 'Off'}"]
 
-    def menu_activate(self, delta: int = 1) -> None:
-        item = self.menu_items()[self.selected]
-        if item.startswith("Play"):
-            self.start_game()
-        elif item.startswith("Map"):
+    def menu_activate(self, delta: int = 0) -> None:
+        n = len(self.ACTIONS)
+        if self.selected < n:
+            if delta == 0:
+                self.run_action(self.ACTIONS[self.selected])
+            return
+        opt = self.selected - n
+        if opt in (0, 1):
+            role = TOM if opt == 0 else JERRY
+            i = DIFFICULTIES.index(self.levels[role])
+            self.levels[role] = DIFFICULTIES[(i + (delta or 1)) % len(DIFFICULTIES)]
+        elif opt == 2:
             i = C.MAP_SIZES.index(self.size)
-            self.size = C.MAP_SIZES[(i + delta) % len(C.MAP_SIZES)]
-        elif item.startswith("Seed"):
-            self.seed_buf = ""
-        elif item.startswith("Bruno"):
+            self.size = C.MAP_SIZES[(i + (delta or 1)) % len(C.MAP_SIZES)]
+        elif opt == 3:
+            if delta == 0:
+                self.seed_buf = ""
+            else:
+                self.seed = max(0, self.seed + delta)
+        else:
             self.bruno = not self.bruno
-        elif item == "Quit":
+
+    def run_action(self, action: str) -> None:
+        if action == "Play as Jerry":
+            self.start_game(PLAY_JERRY)
+        elif action == "Play as Tom":
+            self.start_game(PLAY_TOM)
+        elif action == "Watch AI vs AI":
+            self.start_game(WATCH)
+        elif action == "Algorithm Demo":
+            self.open_demo()
+        elif action == "How to Play":
+            self.help = True
+        else:
             self.running = False
 
     def menu_key(self, key: int, uni: str) -> None:
@@ -153,7 +257,7 @@ class App:
                     self.seed = int(self.seed_buf)
                 self.seed_buf = None
             return
-        n = len(self.menu_items())
+        n = len(self.ACTIONS) + len(self.options())
         if key in (pygame.K_UP, pygame.K_w):
             self.selected = (self.selected - 1) % n
         elif key in (pygame.K_DOWN, pygame.K_s):
@@ -161,33 +265,87 @@ class App:
         elif key in (pygame.K_RETURN, pygame.K_KP_ENTER):
             self.menu_activate()
         elif key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_a, pygame.K_d):
-            label = self.menu_items()[self.selected]
-            if label.startswith(("Map", "Bruno")):
-                self.menu_activate(-1 if key in (pygame.K_LEFT, pygame.K_a) else 1)
+            self.menu_activate(-1 if key in (pygame.K_LEFT, pygame.K_a) else 1)
         elif key == pygame.K_r:
             self.seed = random_seed()
+        elif key == pygame.K_F2:
+            self.open_demo()
         elif key == pygame.K_ESCAPE:
             self.running = False
 
     # ---------------------------------------------------------- game
-    def start_game(self) -> None:
-        self.session = Session(self.seed, self.size, self.bruno)
-        self.scene = "game"
+    def start_game(self, mode: str) -> None:
+        self.session = Session(self.seed, self.size, self.bruno, mode, dict(self.levels),
+                               self.trace)
+        self.fuzzy_role = None
+        self.paused = False
+        self.scene = "game" if self.session.state.winner is None else "end"
 
-    def game_key(self, key: int) -> None:
+    def open_demo(self) -> None:
+        maze = self.session.state.maze if self.session and self.scene != "menu" else \
+            generate_maze(self.seed, self.size)
+        self.back_scene = self.scene
+        self.demo = Demo(maze, self.fonts, self.seed)
+        self.scene = "demo"
+
+    def game_key(self, key: int, shift: bool = False) -> None:
+        """Game keys. A also means LEFT (WASD) when playing, so the path overlay is
+        Tab or Shift+A there; plain A works in spectator mode."""
+        s = self.session
+        assert s is not None
         if key == pygame.K_ESCAPE:
             self.scene = "menu"
-        elif key in MOVE_KEYS and self.session is not None:
-            self.session.human_move(MOVE_KEYS[key])
-            if self.session.state.winner is not None:
+        elif key == pygame.K_F2:
+            self.open_demo()
+        elif key == pygame.K_TAB or key == pygame.K_a and (s.human is None or shift):
+            self.overlay["path"] = not self.overlay["path"]
+        elif key == pygame.K_e:
+            self.overlay["explored"] = not self.overlay["explored"]
+        elif key == pygame.K_f:
+            self.cycle_fuzzy()
+        elif key == pygame.K_t:
+            s.set_trace(not s.trace)
+            self.trace = s.trace
+        elif key == pygame.K_p:
+            self.paused = not self.paused
+        elif key == pygame.K_n and s.human is None:
+            s.ai_round()
+        elif key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
+            self.speed = min(len(SPEEDS) - 1, self.speed + 1)
+        elif key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+            self.speed = max(0, self.speed - 1)
+        elif key in MOVE_KEYS and s.human is not None and not self.paused:
+            s.human_move(MOVE_KEYS[key])
+        if s.state.winner is not None:
+            self.scene = "end"
+
+    def cycle_fuzzy(self) -> None:
+        """F: show the fuzzy panel of the AI (spectator: Tom, then Jerry, then off)."""
+        s = self.session
+        assert s is not None
+        roles = [r for r in (TOM, JERRY) if r in s.agents]
+        order: list[str | None] = [*roles, None]
+        self.fuzzy_role = order[(order.index(self.fuzzy_role) + 1) % len(order)]
+
+    def tick(self) -> None:
+        """Spectator auto-play at the chosen speed."""
+        s = self.session
+        if self.scene != "game" or s is None or s.human is not None or self.paused:
+            return
+        now = time.perf_counter()
+        if now - self.last_step >= 1 / SPEEDS[self.speed]:
+            self.last_step = now
+            s.ai_round()
+            if s.state.winner is not None:
                 self.scene = "end"
 
     def end_choice(self, idx: int) -> None:
+        mode = self.session.mode if self.session else PLAY_JERRY
         if idx == 0:
-            self.start_game()
+            self.start_game(mode)
         elif idx == 1:
             self.seed = random_seed()
-            self.start_game()
+            self.start_game(mode)
         else:
             self.scene = "menu"
 
@@ -195,11 +353,19 @@ class App:
     def handle(self, ev: pygame.event.Event) -> None:
         if ev.type == pygame.QUIT:
             self.running = False
+        elif self.help:
+            if ev.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+                self.help = False
+        elif self.scene == "demo" and self.demo is not None:
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                self.scene = self.back_scene
+            else:
+                self.demo.handle(ev)
         elif ev.type == pygame.KEYDOWN:
             if self.scene == "menu":
                 self.menu_key(ev.key, ev.unicode)
             elif self.scene == "game":
-                self.game_key(ev.key)
+                self.game_key(ev.key, bool(ev.mod & pygame.KMOD_SHIFT))
             elif self.scene == "end":
                 keys = {pygame.K_r: 0, pygame.K_n: 1, pygame.K_m: 2, pygame.K_ESCAPE: 2}
                 if ev.key in keys:
@@ -208,30 +374,75 @@ class App:
             for i, r in enumerate(self.rects):
                 if r.collidepoint(ev.pos):
                     self.selected = i
-        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button in (1, 3):
             hit = next((i for i, r in enumerate(self.rects) if r.collidepoint(ev.pos)), None)
             if hit is not None and self.scene == "menu" and self.seed_buf is None:
                 self.selected = hit
-                self.menu_activate()
+                self.menu_activate(0 if ev.button == 1 or hit < len(self.ACTIONS) else -1)
             elif hit is not None and self.scene == "end":
                 self.end_choice(hit)
 
     def draw(self) -> None:
-        if self.scene == "menu" or self.session is None:
-            hint = "Arrows/mouse select, Enter choose, Left/Right change, R random seed"
+        if self.scene == "demo" and self.demo is not None:
+            self.demo.draw(self.screen)
+        elif self.scene == "menu" or self.session is None:
+            hint = ("Arrows / mouse select, Enter choose, Left / Right change, "
+                    "R random seed, F2 demo")
             if self.seed_buf is not None:
                 hint = "Type seed digits, Enter to confirm, Esc to cancel"
-            self.rects = ui.draw_menu(self.screen, self.fonts, self.menu_items(), self.selected,
-                                      hint)
-            return
-        s = self.session
+            self.rects = ui.draw_menu(self.screen, self.fonts, self.ACTIONS, self.options(),
+                                      self.selected, hint)
+        else:
+            self.draw_game(self.session)
+        if self.help:
+            ui.draw_help(self.screen, self.fonts)
+
+    def draw_game(self, s: Session) -> None:
         self.screen.fill(C.COLOR_BG)
-        ui.draw_board(self.screen, self.fonts, s.state, make_observation(s.state, JERRY))
-        ui.draw_top_bar(self.screen, self.fonts, s.state, JERRY, "Tom: RANDOM")
-        ui.draw_panel(self.screen, self.fonts, s.panel())
+        st = s.state
+        viewer = make_observation(st, s.human) if s.human else None
+        tints = None if s.human else {r: make_observation(st, r).visible_cells
+                                      for r in (TOM, JERRY)}
+
+        def overlays(g: ui.Geometry) -> None:
+            for d in s.decisions.values():
+                if self.overlay["explored"]:
+                    ui.shade_cells(self.screen, g, d.explored, C.COLOR_EXPLORED, 70)
+            for d in s.decisions.values():
+                if self.overlay["path"]:
+                    ui.draw_path(self.screen, g, d.path)
+
+        ui.draw_board(self.screen, self.fonts, st, viewer, tints, under=overlays)
+        if self.fuzzy_role is not None and self.fuzzy_role in s.decisions:
+            d = s.decisions[self.fuzzy_role]
+            system = CONTROLLERS[self.fuzzy_role]
+            if d.fuzzy_inputs is not None:
+                ui.draw_fuzzy_view(self.screen, self.fonts, pygame.Rect(0, C.TOP_BAR_H,
+                                   C.BOARD_PX, C.BOARD_PX), system, d.fuzzy_inputs,
+                                   system.evaluate(d.fuzzy_inputs))
+        middle = f"Tom {s.levels[TOM]} vs Jerry {s.levels[JERRY]}"
+        if s.human:
+            right = f"You: {s.human.title()}"
+        else:
+            right = f"x{SPEEDS[self.speed]}/s" + ("  PAUSED" if self.paused else "")
+        if s.trace:
+            right = f"trace {s.saved}  " + right
+        ui.draw_top_bar(self.screen, self.fonts, st, middle, right)
+        ais = [s.ai_view(r) for r in (TOM, JERRY) if r in s.agents]
+        flags = " ".join(k for k, on in (("A", self.overlay["path"]),
+                                         ("E", self.overlay["explored"]),
+                                         ("F", self.fuzzy_role is not None), ("T", s.trace)) if on)
+        if s.human:
+            footer = ["WASD / arrows move, Space wait, Tab path, E explored, F fuzzy",
+                      f"T trace, P pause, F2 demo, Esc menu   [{flags or 'no overlays'}]"]
+        else:
+            footer = ["P pause, N step, +/- speed, Tab/A path, E explored, F fuzzy",
+                      f"T trace, F2 demo, Esc menu   [{flags or 'no overlays'}]"]
+        ui.draw_panel(self.screen, self.fonts, ais, s.bruno_lines(), s.log, footer,
+                      legend=s.human is not None)
         self.rects = []
         if self.scene == "end":
-            self.rects = ui.draw_end(self.screen, self.fonts, s.state.winner or "", s.state.reason,
+            self.rects = ui.draw_end(self.screen, self.fonts, st.winner or "", st.reason,
                                      s.stats(), END_BUTTONS)
 
     def run(self) -> None:
@@ -239,6 +450,9 @@ class App:
         while self.running:
             for ev in pygame.event.get():
                 self.handle(ev)
+            self.tick()
+            if self.scene == "demo" and self.demo is not None:
+                self.demo.update()
             self.draw()
             pygame.display.flip()
             clock.tick(C.FPS)
@@ -250,10 +464,14 @@ def random_seed() -> int:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    levels = [d.lower() for d in DIFFICULTIES]
     p = argparse.ArgumentParser(description="Cheese Heist")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--size", type=int, default=C.DEFAULT_SIZE, choices=C.MAP_SIZES)
     p.add_argument("--no-bruno", action="store_true")
+    p.add_argument("--tom", default="hard", choices=levels)
+    p.add_argument("--jerry", default="normal", choices=levels)
+    p.add_argument("--trace", action="store_true", help="save every AI decision trace")
     p.add_argument("--screenshot", help="start a game, play --auto rounds, save PNG, exit")
     p.add_argument("--auto", type=int, default=0, help="rounds a seeded random Jerry plays first")
     return p.parse_args(argv)
@@ -266,7 +484,7 @@ def main(argv: list[str] | None = None) -> None:
     pygame.display.set_caption(C.TITLE)
     app = App(screen, args)
     if args.screenshot:
-        app.start_game()
+        app.start_game(PLAY_JERRY)
         jerry = RandomAgent(args.seed + 1)
         for _ in range(args.auto):
             if app.session is None or app.session.state.winner is not None:

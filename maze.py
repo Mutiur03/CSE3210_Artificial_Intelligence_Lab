@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import itertools
 import random
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import config as C
-from search import Cell, bfs_distance_map, reachable
+from search import Cell, bfs_distance_map, dead_end_cells, reachable
 
 INF = 10**9
 
@@ -49,6 +51,11 @@ class Maze:
     def dist(self, a: Cell, b: Cell) -> int:
         """Path distance between two floor cells (INF if unreachable)."""
         return self.dist_map(a).get(b, INF)
+
+    @cached_property
+    def dead_ends(self) -> frozenset[Cell]:
+        """Dead-end corridor cells (search.dead_end_cells), computed once per maze."""
+        return frozenset(dead_end_cells(self.adj))
 
 
 def neighbours(floor: frozenset[Cell] | set[Cell], cell: Cell) -> tuple[Cell, ...]:
@@ -111,15 +118,15 @@ def add_loops(floor: set[Cell], size: int, rng: random.Random) -> int:
     return count
 
 
-def _place(floor: frozenset[Cell], size: int, rng: random.Random) -> dict | None:
+def _place(cells: list[Cell], adj: dict[Cell, tuple[Cell, ...]], size: int,
+           rng: random.Random) -> dict | None:
     """Try to place starts, keys, exit, kennel. Returns a dict or None on failure."""
-    cells = sorted(floor)
     band = size // C.START_REGION_DIVISOR
     jerry_zone = [p for p in cells if p[0] < band and p[1] < band]
     tom_zone = [p for p in cells if p[0] >= size - band and p[1] >= size - band]
-    adj = {cell: neighbours(floor, cell) for cell in floor}
     jerry, tom = rng.choice(jerry_zone), rng.choice(tom_zone)
-    if bfs_distance_map(adj, jerry).get(tom, INF) < C.MIN_START_DISTANCE:
+    jerry_map = bfs_distance_map(adj, jerry)
+    if jerry_map.get(tom, INF) < C.MIN_START_DISTANCE:
         return None
     pool = [p for p in cells if p not in (jerry, tom)]
     rng.shuffle(pool)
@@ -135,7 +142,20 @@ def _place(floor: frozenset[Cell], size: int, rng: random.Random) -> dict | None
         return None
     rest = [p for p in pool if p not in keys]
     exit_cell, kennel = rest[0], rest[1]
+    maps = {jerry: jerry_map, **dict(zip(keys, key_maps, strict=True))}
+    if key_tour(maps, jerry, keys, exit_cell) > C.MAX_KEY_TOUR:
+        return None
     return {"jerry": jerry, "tom": tom, "keys": tuple(keys), "exit": exit_cell, "kennel": kennel}
+
+
+def key_tour(maps: dict[Cell, dict[Cell, int]], start: Cell, keys: list[Cell],
+             exit_cell: Cell) -> int:
+    """Shortest walk start -> all keys (best of the 3! orders) -> exit, in steps.
+    `maps` holds the BFS distance map of `start` and of every key."""
+    return min(
+        sum(maps[a].get(b, INF) for a, b in itertools.pairwise((start, *order, exit_cell)))
+        for order in itertools.permutations(keys)
+    )
 
 
 def validate(maze: Maze) -> bool:
@@ -152,8 +172,8 @@ def generate_maze(seed: int, size: int = C.DEFAULT_SIZE) -> Maze:
     """Build a valid board from `seed`. Same (seed, size) always gives the same maze.
 
     Attempt k uses rng seeded with the string "seed:size:k" (derived seed).
-    Each attempt: DFS carve, add loops, place features, validate; any failure
-    (placement rule or validation) moves on to the next derived seed.
+    Each attempt: DFS carve, add loops, try up to PLACEMENT_TRIES feature
+    placements, validate; any failure moves on to the next derived seed.
     """
     if size % 2 == 0 or not C.MIN_SIZE <= size <= C.MAX_SIZE:
         raise ValueError(f"size must be odd and in {C.MIN_SIZE}..{C.MAX_SIZE}, got {size}")
@@ -162,7 +182,13 @@ def generate_maze(seed: int, size: int = C.DEFAULT_SIZE) -> Maze:
         floor_set = carve_dfs(size, rng)
         add_loops(floor_set, size, rng)
         floor = frozenset(floor_set)
-        spot = _place(floor, size, rng)
+        cells = sorted(floor)
+        adj = {cell: neighbours(floor, cell) for cell in floor}
+        spot = None
+        for _ in range(C.PLACEMENT_TRIES):  # re-place on the same maze before re-carving
+            spot = _place(cells, adj, size, rng)
+            if spot is not None:
+                break
         if spot is None:
             continue
         maze = Maze(

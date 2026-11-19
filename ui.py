@@ -1,102 +1,177 @@
-"""Pygame drawing: board, characters, fog, top bar, right panel, menu, end screen.
+"""Pygame drawing: board, characters, fog, overlays, top bar, right panel, fuzzy
+view, menu, help and end screens.
 
 Pure drawing. No game rules here; everything shown comes from GameState,
-Observation or Decision objects passed in by main.py.
+Observation, Decision and FuzzyResult objects passed in by main.py / demo.py.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 import pygame
 
 import config as C
+from fuzzy import FuzzyResult, FuzzySystem
 from game import JERRY, SLEEP, TOM, GameState, Observation
 from maze import Maze
+from search import Cell
 
 Color = tuple[int, int, int]
+DARK_TEXT = (15, 18, 25)
+MODE_COLORS = {
+    "HUNT": (0xE7, 0x4C, 0x3C), "AMBUSH": (0xE6, 0x7E, 0x22), "SWEEP": (0xF1, 0xC4, 0x0F),
+    "RETREAT": (0x95, 0xA5, 0xA6), "SNEAK": (0x5D, 0xAD, 0xE2), "EVADE": (0xAF, 0x7A, 0xC5),
+    "RUN_FOR_BRUNO": (0xA1, 0x88, 0x7F), "BRUNO": (0xA1, 0x88, 0x7F),
+    "DASH": (0x2E, 0xCC, 0x71), "SCRIPTED": (0x7F, 0x8C, 0x8D),
+}
+ROLE_COLORS = {TOM: C.COLOR_TOM, JERRY: C.COLOR_JERRY}
 
 
 @dataclass
 class Fonts:
     """Default pygame font in a few sizes (no font files needed)."""
 
-    small: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 20))
-    normal: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 24))
-    big: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 36))
+    tiny: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 18))
+    small: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 21))
+    normal: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 25))
+    big: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 34))
     title: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 72))
 
 
-@dataclass
-class PanelInfo:
-    """Text content for the right panel."""
-
-    role: str
-    mode: str
-    algorithm: str
-    nodes: int
-    ms: float
-    belief: str
-    bruno: list[str]
-    events: list[str]
-
-
 def text(surf: pygame.Surface, font: pygame.font.Font, s: str, pos: tuple[int, int],
-         color: Color = C.COLOR_TEXT, center: bool = False) -> pygame.Rect:
+         color: Color = C.COLOR_TEXT, center: bool = False, right: bool = False) -> pygame.Rect:
     img = font.render(s, True, color)
-    rect = img.get_rect(center=pos) if center else img.get_rect(topleft=pos)
+    if center:
+        rect = img.get_rect(center=pos)
+    elif right:
+        rect = img.get_rect(topright=pos)
+    else:
+        rect = img.get_rect(topleft=pos)
     surf.blit(img, rect)
+    return rect
+
+
+def fit(font: pygame.font.Font, s: str, width: int) -> str:
+    """Cut `s` with '..' so it renders within `width` pixels."""
+    if font.size(s)[0] <= width:
+        return s
+    while s and font.size(s + "..")[0] > width:
+        s = s[:-1]
+    return s + ".."
+
+
+def chip(surf: pygame.Surface, font: pygame.font.Font, label: str, pos: tuple[int, int],
+         color: Color) -> pygame.Rect:
+    """Rounded label ('mode chip')."""
+    w, h = font.size(label)
+    rect = pygame.Rect(pos[0], pos[1], w + 18, h + 8)
+    pygame.draw.rect(surf, color, rect, border_radius=rect.h // 2)
+    text(surf, font, label, rect.center, DARK_TEXT, center=True)
     return rect
 
 
 # ------------------------------------------------------------------ board
 
 
-def board_geometry(maze: Maze) -> tuple[int, int, int]:
-    """(tile size, x offset, y offset). 21x21 gives 32 px tiles at (0, 48)."""
-    tile = C.BOARD_PX // max(maze.rows, maze.cols)
-    ox = C.BOARD_X + (C.BOARD_PX - tile * maze.cols) // 2
-    oy = C.BOARD_Y + (C.BOARD_PX - tile * maze.rows) // 2
-    return tile, ox, oy
+@dataclass(frozen=True)
+class Geometry:
+    """Where a maze is drawn: tile size and top-left pixel."""
+
+    tile: int
+    ox: int
+    oy: int
+
+    def center(self, cell: Cell) -> tuple[int, int]:
+        return self.ox + cell[1] * self.tile + self.tile // 2, self.oy + cell[0] * self.tile + \
+            self.tile // 2
+
+    def rect(self, cell: Cell) -> pygame.Rect:
+        return pygame.Rect(self.ox + cell[1] * self.tile, self.oy + cell[0] * self.tile,
+                           self.tile, self.tile)
+
+    def cell_at(self, pos: tuple[int, int], maze: Maze) -> Cell | None:
+        c, r = (pos[0] - self.ox) // self.tile, (pos[1] - self.oy) // self.tile
+        return (r, c) if (r, c) in maze.floor else None
+
+
+def board_geometry(maze: Maze, area: pygame.Rect | None = None) -> Geometry:
+    """Fit the maze into `area` (default: the 672x672 board at (0, 48), 32 px tiles at 21x21)."""
+    area = area or pygame.Rect(C.BOARD_X, C.BOARD_Y, C.BOARD_PX, C.BOARD_PX)
+    tile = min(area.w // maze.cols, area.h // maze.rows)
+    return Geometry(tile, area.x + (area.w - tile * maze.cols) // 2,
+                    area.y + (area.h - tile * maze.rows) // 2)
+
+
+def draw_maze(surf: pygame.Surface, maze: Maze, g: Geometry) -> None:
+    """Floor and walls (walls with a lighter top edge)."""
+    edge = max(2, g.tile // 10)
+    for r in range(maze.rows):
+        for c in range(maze.cols):
+            rect = g.rect((r, c))
+            if (r, c) in maze.floor:
+                pygame.draw.rect(surf, C.COLOR_FLOOR, rect)
+            else:
+                pygame.draw.rect(surf, C.COLOR_WALL, rect)
+                pygame.draw.rect(surf, C.COLOR_WALL_EDGE, (rect.x, rect.y, rect.w, edge))
+
+
+def shade_cells(surf: pygame.Surface, g: Geometry, cells: Iterable[Cell], color: Color,
+                alpha: int) -> None:
+    """Translucent fill over each cell."""
+    tile = pygame.Surface((g.tile, g.tile), pygame.SRCALPHA)
+    tile.fill((*color, alpha))
+    for cell in cells:
+        surf.blit(tile, g.rect(cell))
+
+
+def draw_path(surf: pygame.Surface, g: Geometry, path: list[Cell], color: Color = C.COLOR_PATH,
+              dots: bool = True) -> None:
+    """Planned path: a thin line through the cells plus a dot on each cell."""
+    if len(path) > 1:
+        pygame.draw.lines(surf, color, False, [g.center(c) for c in path], max(2, g.tile // 12))
+    if dots:
+        for c in path[1:]:
+            pygame.draw.circle(surf, color, g.center(c), max(2, g.tile // 7))
 
 
 def draw_board(surf: pygame.Surface, fonts: Fonts, state: GameState,
-               viewer: Observation | None) -> None:
-    """Maze, features, fog and characters. `viewer` = human's observation (None = no fog)."""
+               viewer: Observation | None, tints: dict[str, frozenset[Cell]] | None = None,
+               g: Geometry | None = None, under: Callable[[Geometry], None] | None = None) -> None:
+    """Maze, features, fog and characters.
+
+    `viewer` = the human's observation: cells outside it are dimmed and the
+    opponent/Bruno are drawn only when visible. `tints` (spectator) colours each
+    role's vision instead. `under` draws overlays between floor and pieces.
+    """
     maze = state.maze
-    tile, ox, oy = board_geometry(maze)
+    g = g or board_geometry(maze)
     pygame.draw.rect(surf, C.COLOR_BG, (C.BOARD_X, C.BOARD_Y, C.BOARD_PX, C.BOARD_PX))
-    fog = pygame.Surface((tile, tile), pygame.SRCALPHA)
-    fog.fill((0, 0, 0, C.FOG_ALPHA))
-    edge = max(2, tile // 10)
-    for r in range(maze.rows):
-        for c in range(maze.cols):
-            x, y = ox + c * tile, oy + r * tile
-            if (r, c) in maze.floor:
-                pygame.draw.rect(surf, C.COLOR_FLOOR, (x, y, tile, tile))
-            else:
-                pygame.draw.rect(surf, C.COLOR_WALL, (x, y, tile, tile))
-                pygame.draw.rect(surf, C.COLOR_WALL_EDGE, (x, y, tile, edge))
-            if viewer is not None and (r, c) not in viewer.visible_cells:
-                surf.blit(fog, (x, y))
-
-    def center(cell: tuple[int, int]) -> tuple[int, int]:
-        return ox + cell[1] * tile + tile // 2, oy + cell[0] * tile + tile // 2
-
-    draw_kennel(surf, center(maze.kennel), tile)
+    draw_maze(surf, maze, g)
+    if tints:
+        for role, cells in tints.items():
+            shade_cells(surf, g, cells, ROLE_COLORS[role] if role == TOM else C.COLOR_ACCENT, 70)
+    if under is not None:
+        under(g)
+    if viewer is not None:
+        hidden = [(r, c) for r in range(maze.rows) for c in range(maze.cols)
+                  if (r, c) not in viewer.visible_cells]
+        shade_cells(surf, g, hidden, (0, 0, 0), C.FOG_ALPHA)
+    draw_kennel(surf, g.center(maze.kennel), g.tile)
     if viewer is None or viewer.exit_cell is not None:
-        draw_exit(surf, center(maze.exit), tile, state.exit_open)
+        draw_exit(surf, g.center(maze.exit), g.tile, state.exit_open)
     for k in state.keys:
-        draw_key(surf, center(k), tile)
+        draw_key(surf, g.center(k), g.tile)
     sees = viewer.visible_cells if viewer is not None else None
     b = state.bruno
     if b is not None and (sees is None or b.pos in sees):
-        draw_bruno(surf, fonts, center(b.pos), tile, b.state == SLEEP)
+        draw_bruno(surf, fonts, g.center(b.pos), g.tile, b.state == SLEEP)
     if sees is None or state.tom in sees:
-        draw_tom(surf, center(state.tom), tile, state.tom_stun)
+        draw_tom(surf, g.center(state.tom), g.tile, state.tom_stun)
     if sees is None or state.jerry in sees:
-        draw_jerry(surf, center(state.jerry), tile)
+        draw_jerry(surf, g.center(state.jerry), g.tile)
 
 
 def draw_key(surf: pygame.Surface, ctr: tuple[int, int], t: int) -> None:
@@ -195,69 +270,125 @@ def draw_bruno(surf: pygame.Surface, fonts: Fonts, ctr: tuple[int, int], t: int,
                                max(1, t // 14))
 
 
-# ------------------------------------------------------------------ bars and panel
+# ------------------------------------------------------------------ top bar and panel
 
 
-def draw_top_bar(surf: pygame.Surface, fonts: Fonts, state: GameState, role: str,
-                 opponent: str) -> None:
-    """Turn counter with progress bar, key icons, opponent difficulty, human role."""
+def draw_top_bar(surf: pygame.Surface, fonts: Fonts, state: GameState, middle: str,
+                 right: str) -> None:
+    """Turn counter with progress bar, key icons, matchup / difficulty, role or speed."""
     pygame.draw.rect(surf, C.COLOR_PANEL, (0, 0, C.WINDOW_W, C.TOP_BAR_H))
     pygame.draw.line(surf, C.COLOR_PANEL_LINE, (0, C.TOP_BAR_H - 1), (C.WINDOW_W, C.TOP_BAR_H - 1))
     turn = min(state.turn, C.TURN_LIMIT)
     text(surf, fonts.normal, f"Turn {turn}/{C.TURN_LIMIT}", (14, 15))
-    bar = pygame.Rect(130, 18, 200, 12)
+    bar = pygame.Rect(130, 18, 170, 12)
     pygame.draw.rect(surf, C.COLOR_PANEL_LINE, bar, border_radius=6)
     fill = bar.copy()
     fill.w = int(bar.w * turn / C.TURN_LIMIT)
     pygame.draw.rect(surf, C.COLOR_ACCENT, fill, border_radius=6)
-    text(surf, fonts.normal, "Keys", (360, 15))
+    text(surf, fonts.normal, "Keys", (322, 15))
     for i in range(C.NUM_KEYS):
-        center = (420 + i * 26, 24)
         width = 0 if i < state.keys_taken else 2
-        pygame.draw.circle(surf, C.COLOR_CHEESE, center, 9, width)
-    text(surf, fonts.normal, opponent, (520, 15), C.COLOR_TEXT_DIM)
-    text(surf, fonts.normal, f"You: {role}", (C.PANEL_X + 20, 15))
+        pygame.draw.circle(surf, C.COLOR_CHEESE, (382 + i * 24, 24), 9, width)
+    text(surf, fonts.normal, middle, (460, 15), C.COLOR_TEXT_DIM)
+    text(surf, fonts.normal, right, (C.WINDOW_W - 16, 15), C.COLOR_TEXT, right=True)
 
 
-def draw_panel(surf: pygame.Surface, fonts: Fonts, info: PanelInfo) -> None:
-    """Right panel: AI decision info, belief, Bruno, event log, legend."""
-    x0 = C.PANEL_X
-    pygame.draw.rect(surf, C.COLOR_PANEL, (x0, C.TOP_BAR_H, C.PANEL_W, C.WINDOW_H - C.TOP_BAR_H))
-    pygame.draw.line(surf, C.COLOR_PANEL_LINE, (x0, C.TOP_BAR_H), (x0, C.WINDOW_H))
-    x, y = x0 + 20, C.TOP_BAR_H + 16
-    text(surf, fonts.big, f"AI: {info.role}", (x, y))
-    y += 40
-    chip = text(surf, fonts.normal, info.mode, (x + 10, y + 5), (15, 18, 25))
-    pygame.draw.rect(surf, C.COLOR_ACCENT, chip.inflate(20, 10), border_radius=12)
-    text(surf, fonts.normal, info.mode, (x + 10, y + 5), (15, 18, 25))
-    y += 38
-    for label, val in (("Algorithm", info.algorithm), ("Nodes", str(info.nodes)),
-                       ("Time", f"{info.ms:.2f} ms")):
-        text(surf, fonts.small, label, (x, y), C.COLOR_TEXT_DIM)
-        text(surf, fonts.normal, val, (x + 100, y - 2))
-        y += 24
-    y = section(surf, fonts, "Belief", [info.belief], x, y + 8)
-    y = section(surf, fonts, "Bruno", info.bruno, x, y)
-    y = section(surf, fonts, "Events", info.events[-C.EVENT_LOG_LINES:] or ["-"], x, y)
-    draw_legend(surf, fonts, x, C.WINDOW_H - 92)
+@dataclass
+class AIView:
+    """What the panel shows about one AI agent."""
+
+    role: str
+    difficulty: str
+    mode: str
+    algorithm: str
+    nodes: int
+    ms: float
+    fuzzy: FuzzyResult | None
+    belief: str
+
+
+def fuzzy_bars(surf: pygame.Surface, fonts: Fonts, x: int, y: int, w: int,
+               res: FuzzyResult, row_h: int = 18) -> int:
+    """One bar per output set (membership at the centroid); the chosen set is bright."""
+    names = list(res.output_memberships)
+    label_w = 64
+    for name in names:
+        mu = res.output_memberships[name]
+        color = MODE_COLORS.get(name, C.COLOR_ACCENT)
+        text(surf, fonts.tiny, name if len(name) <= 7 else name[:7], (x, y + 2), C.COLOR_TEXT_DIM)
+        bar = pygame.Rect(x + label_w, y + 3, w - label_w - 44, row_h - 7)
+        pygame.draw.rect(surf, C.COLOR_PANEL_LINE, bar, border_radius=4)
+        fill = bar.copy()
+        fill.w = max(0, int(bar.w * mu))
+        if fill.w:
+            pygame.draw.rect(surf, color, fill, border_radius=4)
+        text(surf, fonts.tiny, f"{mu:.2f}", (x + w, y + 2), C.COLOR_TEXT, right=True)
+        y += row_h
+    return y
+
+
+def draw_ai_block(surf: pygame.Surface, fonts: Fonts, v: AIView, x: int, y: int, w: int,
+                  compact: bool) -> int:
+    """Header, mode chip, algorithm/nodes/ms, fuzzy bars, belief. Returns the next y."""
+    font = fonts.normal if compact else fonts.big
+    text(surf, font, f"AI {v.role.title()}  ({v.difficulty})", (x, y), ROLE_COLORS[v.role])
+    y += 26 if compact else 34
+    rect = chip(surf, fonts.small, v.mode, (x, y), MODE_COLORS.get(v.mode, C.COLOR_ACCENT))
+    text(surf, fonts.small, f"{v.nodes} nodes   {v.ms:.1f} ms", (rect.right + 12, y + 5),
+         C.COLOR_TEXT_DIM)
+    y += rect.h + 6
+    text(surf, fonts.small, fit(fonts.small, v.algorithm, w), (x, y))
+    y += 20
+    if v.fuzzy is not None:
+        y = fuzzy_bars(surf, fonts, x, y + 2, w, v.fuzzy, 16 if compact else 18)
+        text(surf, fonts.tiny, f"centroid {v.fuzzy.centroid:.1f}", (x, y), C.COLOR_TEXT_DIM)
+        y += 16
+    else:
+        text(surf, fonts.tiny, "EASY: no fuzzy logic (scripted greedy)", (x, y + 2),
+             C.COLOR_TEXT_DIM)
+        y += 18
+    text(surf, fonts.small, fit(fonts.small, v.belief, w), (x, y))
+    return y + 22
 
 
 def section(surf: pygame.Surface, fonts: Fonts, title: str, lines: list[str], x: int,
-            y: int) -> int:
-    pygame.draw.line(surf, C.COLOR_PANEL_LINE, (x, y), (C.WINDOW_W - 20, y))
-    text(surf, fonts.small, title.upper(), (x, y + 8), C.COLOR_TEXT_DIM)
-    y += 30
+            y: int, w: int) -> int:
+    pygame.draw.line(surf, C.COLOR_PANEL_LINE, (x, y), (x + w, y))
+    text(surf, fonts.tiny, title.upper(), (x, y + 6), C.COLOR_TEXT_DIM)
+    y += 24
     for line in lines:
-        text(surf, fonts.small, line, (x, y))
-        y += 20
-    return y + 8
+        text(surf, fonts.small, fit(fonts.small, line, w), (x, y))
+        y += 19
+    return y + 6
+
+
+def draw_panel(surf: pygame.Surface, fonts: Fonts, ais: list[AIView], bruno: list[str],
+               events: list[str], footer: list[str], legend: bool) -> None:
+    """Right panel: one block per AI, Bruno, event log, legend / controls."""
+    x0 = C.PANEL_X
+    pygame.draw.rect(surf, C.COLOR_PANEL, (x0, C.TOP_BAR_H, C.PANEL_W, C.WINDOW_H - C.TOP_BAR_H))
+    pygame.draw.line(surf, C.COLOR_PANEL_LINE, (x0, C.TOP_BAR_H), (x0, C.WINDOW_H))
+    x, y, w = x0 + 18, C.TOP_BAR_H + 12, C.PANEL_W - 36
+    compact = len(ais) > 1
+    for v in ais:
+        y = draw_ai_block(surf, fonts, v, x, y, w, compact)
+        if compact:
+            y += 4
+    y = section(surf, fonts, "Bruno", bruno, x, y, w)
+    n_events = 4 if compact else C.EVENT_LOG_LINES
+    section(surf, fonts, "Events", events[-n_events:] or ["-"], x, y, w)
+    bottom = C.WINDOW_H - 8 - 17 * len(footer)
+    if legend:
+        draw_legend(surf, fonts, x, bottom - 70)
+    for i, line in enumerate(footer):
+        text(surf, fonts.tiny, line, (x, bottom + i * 17), C.COLOR_TEXT_DIM)
 
 
 def draw_legend(surf: pygame.Surface, fonts: Fonts, x: int, y: int) -> None:
-    """3x2 grid of icons with names, plus the control hint."""
-    pygame.draw.line(surf, C.COLOR_PANEL_LINE, (x, y - 8), (C.WINDOW_W - 20, y - 8))
-    t = 28
-    icons = [
+    """3x2 grid of icons with names."""
+    pygame.draw.line(surf, C.COLOR_PANEL_LINE, (x, y - 8), (C.WINDOW_W - 18, y - 8))
+    t = 26
+    icons: list[tuple[str, Callable[[tuple[int, int]], None]]] = [
         ("Jerry", lambda p: draw_jerry(surf, p, t)),
         ("Tom", lambda p: draw_tom(surf, p, t, 0)),
         ("Bruno", lambda p: draw_bruno(surf, fonts, p, t, False)),
@@ -266,36 +397,155 @@ def draw_legend(surf: pygame.Surface, fonts: Fonts, x: int, y: int) -> None:
         ("Kennel", lambda p: draw_kennel(surf, p, t)),
     ]
     for i, (name, draw) in enumerate(icons):
-        cx, cy = x + 14 + (i % 3) * 130, y + 14 + (i // 3) * 32
+        cx, cy = x + 14 + (i % 3) * 128, y + 14 + (i // 3) * 30
         draw((cx, cy))
         text(surf, fonts.small, name, (cx + 22, cy - 7))
-    text(surf, fonts.small, "WASD/arrows move, Space wait, Esc menu", (x, C.WINDOW_H - 20),
-         C.COLOR_TEXT_DIM)
 
 
-# ------------------------------------------------------------------ menu and end
+# ------------------------------------------------------------------ fuzzy view
 
 
-def draw_menu(surf: pygame.Surface, fonts: Fonts, items: list[str], selected: int,
-              hint: str) -> list[pygame.Rect]:
-    """Title, menu items (selected highlighted), returns item rects for mouse hits."""
+def draw_curve_box(surf: pygame.Surface, fonts: Fonts, rect: pygame.Rect, title: str,
+                   lo: float, hi: float, curves: list[tuple[str, Callable[[float], float], Color]],
+                   marker: float | None, fill: list[tuple[int, float]] | None = None) -> None:
+    """Membership curves of one variable on [lo, hi]; `marker` = crisp value line;
+    `fill` = aggregated output shape (x, mu) drawn underneath."""
+    pygame.draw.rect(surf, (30, 36, 50), rect, border_radius=6)
+    text(surf, fonts.small, title, (rect.x + 8, rect.y + 4))
+    plot = pygame.Rect(rect.x + 8, rect.y + 24, rect.w - 16, rect.h - 44)
+
+    def px(x: float, mu: float) -> tuple[int, int]:
+        return (int(plot.x + (x - lo) / (hi - lo) * plot.w), int(plot.bottom - mu * plot.h))
+
+    pygame.draw.line(surf, C.COLOR_PANEL_LINE, plot.bottomleft, plot.bottomright)
+    if fill:
+        pts = [px(lo, 0)] + [px(x, mu) for x, mu in fill] + [px(hi, 0)]
+        pygame.draw.polygon(surf, (70, 90, 120), pts)
+    lx = rect.x + 8
+    for name, mf, color in curves:
+        n = 120
+        pygame.draw.lines(surf, color, False,
+                          [px(lo + (hi - lo) * i / n, mf(lo + (hi - lo) * i / n))
+                           for i in range(n + 1)], 2)
+        lab = text(surf, fonts.tiny, name, (lx, plot.bottom + 4), color)
+        lx = lab.right + 10
+    if marker is not None:
+        mx = px(marker, 0)[0]
+        pygame.draw.line(surf, (255, 255, 255), (mx, plot.y), (mx, plot.bottom), 2)
+        text(surf, fonts.tiny, f"{marker:.2f}".rstrip("0").rstrip("."), (rect.right - 8,
+             rect.y + 6), (255, 255, 255), right=True)
+
+
+PALETTE = [(0x5D, 0xAD, 0xE2), (0xF5, 0xB0, 0x41), (0xE7, 0x4C, 0x3C), (0x58, 0xD6, 0x8D)]
+
+
+def draw_fuzzy_view(surf: pygame.Surface, fonts: Fonts, rect: pygame.Rect, system: FuzzySystem,
+                    inputs: dict[str, float], res: FuzzyResult,
+                    selected: str | None = None) -> None:
+    """Membership curves of every input (crisp value marked), rule strengths, the
+    aggregated output with the centroid line, and the chosen mode."""
+    pygame.draw.rect(surf, (20, 25, 36), rect)
+    pygame.draw.rect(surf, C.COLOR_PANEL_LINE, rect, 1)
+    text(surf, fonts.big, f"Fuzzy controller: {system.role.title()}", (rect.x + 14, rect.y + 10))
+    names = list(system.inputs)
+    col_w = (rect.w - 14 * (len(names) + 1)) // len(names)
+    for i, name in enumerate(names):
+        var = system.inputs[name]
+        box = pygame.Rect(rect.x + 14 + i * (col_w + 14), rect.y + 48, col_w, 150)
+        curves = [(s, mf, PALETTE[j % len(PALETTE)]) for j, (s, mf) in enumerate(var.sets.items())]
+        draw_curve_box(surf, fonts, box, name, var.lo, var.hi, curves, inputs[name])
+        if name == selected:
+            pygame.draw.rect(surf, C.COLOR_CHEESE, box, 2, border_radius=6)
+    out = system.output
+    box = pygame.Rect(rect.x + 14, rect.y + 212, rect.w - 28, 170)
+    curves = [(s, mf, MODE_COLORS.get(s, C.COLOR_ACCENT)) for s, mf in out.sets.items()]
+    draw_curve_box(surf, fonts, box, f"{out.name}: clipped rules, max-aggregated", out.lo, out.hi,
+                   curves, res.centroid, res.aggregated)
+    y = box.bottom + 12
+    text(surf, fonts.normal, "Rules (strength = min of antecedents)", (rect.x + 14, y))
+    y += 26
+    for rid, ante, out_set in system.rules:
+        st = res.rule_strengths[rid]
+        bar = pygame.Rect(rect.x + 14, y + 3, 90, 12)
+        pygame.draw.rect(surf, C.COLOR_PANEL_LINE, bar, border_radius=3)
+        if st > 0:
+            pygame.draw.rect(surf, MODE_COLORS.get(out_set, C.COLOR_ACCENT),
+                             (bar.x, bar.y, max(2, int(bar.w * st)), bar.h), border_radius=3)
+        color = C.COLOR_TEXT if st > 0 else C.COLOR_TEXT_DIM
+        text(surf, fonts.small, f"{st:.2f}  {rid}: {system.rule_text((rid, ante, out_set))}",
+             (bar.right + 10, y), color)
+        y += 20
+    y += 8
+    text(surf, fonts.normal, f"Centroid {res.centroid:.1f}  ->  mode", (rect.x + 14, y + 4))
+    chip(surf, fonts.normal, res.mode, (rect.x + 250, y), MODE_COLORS.get(res.mode, C.COLOR_ACCENT))
+
+
+# ------------------------------------------------------------------ menu, help, end
+
+
+def draw_menu(surf: pygame.Surface, fonts: Fonts, actions: list[str], options: list[str],
+              selected: int, hint: str) -> list[pygame.Rect]:
+    """Title, action buttons (left column) and options (right column, Left/Right to
+    change). `selected` indexes actions + options. Returns all rects for mouse hits."""
     surf.fill(C.COLOR_BG)
-    text(surf, fonts.title, C.TITLE, (C.WINDOW_W // 2, 120), C.COLOR_CHEESE, center=True)
-    draw_jerry(surf, (C.WINDOW_W // 2 - 60, 200), 64)
-    draw_key(surf, (C.WINDOW_W // 2, 200), 64)
-    draw_tom(surf, (C.WINDOW_W // 2 + 60, 200), 64, 0)
+    text(surf, fonts.title, C.TITLE, (C.WINDOW_W // 2, 80), C.COLOR_CHEESE, center=True)
+    draw_jerry(surf, (C.WINDOW_W // 2 - 70, 160), 64)
+    draw_key(surf, (C.WINDOW_W // 2, 160), 64)
+    draw_tom(surf, (C.WINDOW_W // 2 + 70, 160), 64, 0)
     rects = []
-    for i, item in enumerate(items):
-        rect = pygame.Rect(0, 0, 360, 44)
-        rect.center = (C.WINDOW_W // 2, 290 + i * 56)
-        sel = i == selected
-        pygame.draw.rect(surf, C.COLOR_ACCENT if sel else C.COLOR_PANEL, rect, border_radius=10)
-        text(surf, fonts.normal, item, rect.center, (15, 18, 25) if sel else C.COLOR_TEXT,
-             center=True)
-        rects.append(rect)
-    text(surf, fonts.small, hint, (C.WINDOW_W // 2, C.WINDOW_H - 40), C.COLOR_TEXT_DIM,
+    text(surf, fonts.small, "PLAY", (C.WINDOW_W // 2 - 340, 214), C.COLOR_TEXT_DIM)
+    text(surf, fonts.small, "OPTIONS  (Left / Right to change)", (C.WINDOW_W // 2 + 30, 214),
+         C.COLOR_TEXT_DIM)
+    for col, items in enumerate((actions, options)):
+        for i, item in enumerate(items):
+            idx = len(rects)
+            rect = pygame.Rect(0, 0, 320, 44)
+            rect.topleft = (C.WINDOW_W // 2 - 340 + col * 370, 240 + i * 56)
+            sel = idx == selected
+            pygame.draw.rect(surf, C.COLOR_ACCENT if sel else C.COLOR_PANEL, rect, border_radius=10)
+            if col == 1:
+                text(surf, fonts.normal, "<", (rect.x + 16, rect.centery), DARK_TEXT if sel
+                     else C.COLOR_TEXT_DIM, center=True)
+                text(surf, fonts.normal, ">", (rect.right - 16, rect.centery), DARK_TEXT if sel
+                     else C.COLOR_TEXT_DIM, center=True)
+            text(surf, fonts.normal, item, rect.center, DARK_TEXT if sel else C.COLOR_TEXT,
+                 center=True)
+            rects.append(rect)
+    text(surf, fonts.small, hint, (C.WINDOW_W // 2, C.WINDOW_H - 34), C.COLOR_TEXT_DIM,
          center=True)
     return rects
+
+
+HELP_STEPS = [
+    "1. Jerry (grey mouse) must collect all 3 golden keys.",
+    "2. The 3rd key opens the exit (red door turns green) and alerts Tom where it is.",
+    "3. Walk onto the open exit to win. Tom wins if he catches Jerry or turn 120 passes.",
+    "4. Both see only 5 steps along corridors. Tom smells the keys, not Jerry.",
+    "5. Step on the kennel to wake Bruno (twice per game): he guards Jerry and bites Tom.",
+]
+HELP_KEYS = [
+    "WASD / arrows move, Space wait.  Tab (or Shift+A; A when watching) path overlay,",
+    "E explored cells, F fuzzy panel, T save AI traces, P pause, N single step,",
+    "+ / - speed, F2 algorithm demo, Esc menu",
+]
+
+
+def draw_help(surf: pygame.Surface, fonts: Fonts) -> None:
+    """How to Play overlay: 5 short steps plus the controls."""
+    shade = pygame.Surface((C.WINDOW_W, C.WINDOW_H), pygame.SRCALPHA)
+    shade.fill((0, 0, 0, 190))
+    surf.blit(shade, (0, 0))
+    box = pygame.Rect(0, 0, 860, 420)
+    box.center = (C.WINDOW_W // 2, C.WINDOW_H // 2)
+    pygame.draw.rect(surf, C.COLOR_PANEL, box, border_radius=16)
+    pygame.draw.rect(surf, C.COLOR_PANEL_LINE, box, 2, border_radius=16)
+    text(surf, fonts.big, "How to Play", (box.centerx, box.y + 36), C.COLOR_CHEESE, center=True)
+    for i, line in enumerate(HELP_STEPS):
+        text(surf, fonts.normal, line, (box.x + 40, box.y + 80 + i * 40))
+    for i, line in enumerate(HELP_KEYS):
+        text(surf, fonts.small, line, (box.x + 40, box.y + 292 + i * 24), C.COLOR_TEXT_DIM)
+    text(surf, fonts.small, "Press any key to close", (box.centerx, box.bottom - 30),
+         C.COLOR_TEXT_DIM, center=True)
 
 
 def draw_end(surf: pygame.Surface, fonts: Fonts, winner: str, reason: str,
@@ -304,21 +554,21 @@ def draw_end(surf: pygame.Surface, fonts: Fonts, winner: str, reason: str,
     shade = pygame.Surface((C.WINDOW_W, C.WINDOW_H), pygame.SRCALPHA)
     shade.fill((0, 0, 0, 150))
     surf.blit(shade, (0, 0))
-    box = pygame.Rect(0, 0, 560, 420)
+    box = pygame.Rect(0, 0, 600, 430)
     box.center = (C.WINDOW_W // 2, C.WINDOW_H // 2)
     pygame.draw.rect(surf, C.COLOR_PANEL, box, border_radius=16)
     pygame.draw.rect(surf, C.COLOR_PANEL_LINE, box, 2, border_radius=16)
-    color = C.COLOR_JERRY if winner == JERRY else C.COLOR_TOM if winner == TOM else C.COLOR_TEXT
+    color = ROLE_COLORS.get(winner, C.COLOR_TEXT)
     text(surf, fonts.title, f"{winner.title()} wins!", (box.centerx, box.top + 56), color,
          center=True)
     text(surf, fonts.normal, reason, (box.centerx, box.top + 104), C.COLOR_TEXT_DIM, center=True)
     for i, line in enumerate(stats):
-        text(surf, fonts.normal, line, (box.left + 60, box.top + 140 + i * 28))
+        text(surf, fonts.normal, line, (box.left + 50, box.top + 138 + i * 28))
     rects = []
     for i, label in enumerate(buttons):
-        rect = pygame.Rect(0, 0, 160, 44)
-        rect.center = (box.left + 95 + i * 185, box.bottom - 44)
+        rect = pygame.Rect(0, 0, 170, 44)
+        rect.center = (box.left + 105 + i * 195, box.bottom - 44)
         pygame.draw.rect(surf, C.COLOR_ACCENT, rect, border_radius=10)
-        text(surf, fonts.small, label, rect.center, (15, 18, 25), center=True)
+        text(surf, fonts.small, label, rect.center, DARK_TEXT, center=True)
         rects.append(rect)
     return rects
