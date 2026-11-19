@@ -471,6 +471,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--no-bruno", action="store_true")
     p.add_argument("--tom", default="hard", choices=levels)
     p.add_argument("--jerry", default="normal", choices=levels)
+    p.add_argument("--demo", action="store_true", help="open the algorithm demo screen")
     p.add_argument("--trace", action="store_true", help="save every AI decision trace")
     p.add_argument("--screenshot", help="start a game, play --auto rounds, save PNG, exit")
     p.add_argument("--auto", type=int, default=0, help="rounds a seeded random Jerry plays first")
@@ -497,6 +498,8 @@ def main(argv: list[str] | None = None) -> None:
         pygame.image.save(screen, args.screenshot)
         print(f"saved {args.screenshot}")
     else:
+        if args.demo:
+            app.open_demo()
         app.run()
     pygame.quit()
 
