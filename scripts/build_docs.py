@@ -409,7 +409,8 @@ def viva() -> str:  # noqa: PLR0915
                 "What would you improve?",
                 f"MCTS and minimax add little over HARD in the experiments (E5), so: a richer MCTS tree and playout policy, "
                 f"evaluation weights fitted by self-play, hidden-information search for Jerry, 1000 games per experiment. "
-                f"Balance: Jerry wins {jw(e1, 'Tom HARD vs Jerry NORMAL')} against HARD Tom, below the 35-60% target.",
+                f"Balance: Jerry wins {jw(e1, 'Tom HARD vs Jerry NORMAL')} against HARD Tom with NORMAL Jerry and {jw(e1, 'Tom HARD vs Jerry HARD')} with HARD Jerry, "
+                f"{'inside' if all(35 <= 100 * e1[k]['jerry_win'] <= 60 for k in ('Tom HARD vs Jerry NORMAL', 'Tom HARD vs Jerry HARD')) else 'OUTSIDE'} the 35-60% target.",
                 ("minimax.py", "evaluate"),
                 ("mcts.py", "mcts"),
             ),

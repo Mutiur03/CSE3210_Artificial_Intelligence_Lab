@@ -281,6 +281,19 @@ def test_fog_never_leaks_in_real_games() -> None:
             run_round(s, lambda o, a=a: a.act(o).action, lambda o, b=b: b.act(o).action)
 
 
+def test_observation_maze_hides_exit_keys_and_starts() -> None:
+    """Observation.maze is the agents' only map: walls yes, hidden features no."""
+    for seed in range(10):
+        s = new_game(generate_maze(seed))
+        for role in (TOM, JERRY):
+            view = make_observation(s, role).maze
+            assert view.exit is None and view.keys == ()
+            assert view.jerry_start is None and view.tom_start is None
+            assert view.floor == s.maze.floor and view.dist(s.jerry, s.tom) == s.maze.dist(
+                s.jerry, s.tom)
+    assert make_observation(s, JERRY).exit_cell == s.maze.exit  # the role's own knowledge stays
+
+
 def test_last_seen_ages() -> None:
     s = corridor("HJ....T........E")
     run_round(s, wait, lambda _o: "RIGHT")  # Tom walks out of sight

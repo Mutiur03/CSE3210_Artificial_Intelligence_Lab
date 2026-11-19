@@ -44,6 +44,7 @@ MCTS_UCB_C = 1.4
 MCTS_PLAYOUT_TURNS = 20
 MCTS_REPLAN_TURNS = 5
 DLS_DEPTH = 5
+NORMAL_FLEE_RANGE = 2  # NORMAL EVADE: one-step flee only when Tom is this close, else A* to goal
 CLOSE_RANGE = 4
 # agent mode details (4.5)
 SWEEP_STALE_TURNS = 20  # Tom SWEEP: a cell not seen for this many turns counts as unseen
@@ -68,7 +69,6 @@ WINDOW_W = 1100
 WINDOW_H = 720
 FPS = 60
 TITLE = "Cheese Heist"
-TILE = 32
 TOP_BAR_H = 48
 BOARD_X = 0
 BOARD_Y = TOP_BAR_H

@@ -526,10 +526,13 @@ class JerryAgent(_AIAgent):
                           res.explored_order, res.trace)
 
     def evade(self, obs: Observation) -> Plan:
-        """EVADE: NORMAL flees one step (no DLS); HARD+ runs the depth-5 DLS evade."""
+        """EVADE: NORMAL flees one step (no DLS) only within NORMAL_FLEE_RANGE of Tom,
+        otherwise walks on danger-weighted; HARD+ runs the depth-5 DLS evade."""
         tom = self.tom_cell(obs)
         assert tom is not None  # EVADE needs danger < Safe, i.e. a known Tom
         maze, me = obs.maze, obs.self_pos
+        if self.difficulty == NORMAL and maze.dist(me, tom) > C.NORMAL_FLEE_RANGE:
+            return self.run_to(obs, self.goal(obs))  # far from Tom: keep walking, danger-aware
         if self.difficulty == NORMAL:
             d_tom = maze.dist_map(tom)
             action = flee_step(maze, me, d_tom)

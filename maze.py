@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cached_property
 
 import config as C
@@ -26,10 +26,10 @@ class Maze:
     cols: int
     floor: frozenset[Cell]
     keys: tuple[Cell, ...]
-    exit: Cell
+    exit: Cell | None  # None only in the agent-facing `public` view
     kennel: Cell
-    jerry_start: Cell
-    tom_start: Cell
+    jerry_start: Cell | None  # None only in the `public` view
+    tom_start: Cell | None  # None only in the `public` view
     seed: int = 0
     attempt: int = 0
     adj: dict[Cell, tuple[Cell, ...]] = field(init=False, repr=False)
@@ -39,8 +39,14 @@ class Maze:
         self.adj = {cell: neighbours(self.floor, cell) for cell in self.floor}
         self._dist_cache = {}
 
-    def is_floor(self, cell: Cell) -> bool:
-        return cell in self.floor
+    @cached_property
+    def public(self) -> Maze:
+        """Agent-facing view: same walls and shared distance caches, but no exit, keys or
+        start cells. Observation.maze carries this, so an agent cannot read a hidden
+        feature from it (the exit only reaches Tom through the alarm)."""
+        view = replace(self, exit=None, keys=(), jerry_start=None, tom_start=None)
+        view.adj, view._dist_cache = self.adj, self._dist_cache
+        return view
 
     def dist_map(self, src: Cell) -> dict[Cell, int]:
         """BFS distance map from `src` (cached)."""

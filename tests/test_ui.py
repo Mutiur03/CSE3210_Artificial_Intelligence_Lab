@@ -4,7 +4,7 @@ import pygame
 import pytest
 
 import main
-from game import JERRY, TOM
+from game import JERRY, TOM, legal_actions
 
 
 @pytest.fixture
@@ -47,12 +47,27 @@ def test_play_as_tom_and_overlays(app: main.App) -> None:
     app.start_game(main.PLAY_TOM)
     s = app.session
     assert s.human == TOM and JERRY in s.decisions  # Jerry already moved
-    for key in (pygame.K_TAB, pygame.K_e, pygame.K_f):
+    for key in (pygame.K_TAB, pygame.K_e, pygame.K_f):  # AI overlays: refused in human games
         app.game_key(key)
-    assert app.overlay["path"] and app.overlay["explored"] and app.fuzzy_role == JERRY
+    assert not app.overlay["path"] and not app.overlay["explored"] and app.fuzzy_role is None
     for _ in range(10):
         if s.state.winner is None:
             s.human_move("WAIT")
+    app.draw()
+
+
+def test_human_game_hides_ai_plans_and_blocked_move_notice(app: main.App) -> None:
+    """Human play never draws the AI's planned path or panel, and a wall bump says so."""
+    app.start_game(main.PLAY_JERRY)
+    app.overlay["path"] = True  # even if left on from a spectator game
+    app.draw()
+    assert app.session is not None and app.session.human == JERRY
+    s = app.session
+    blocked = next(a for a in ("UP", "DOWN", "LEFT", "RIGHT")
+                   if a not in legal_actions(s.state, JERRY))
+    app.game_key({"UP": pygame.K_UP, "DOWN": pygame.K_DOWN, "LEFT": pygame.K_LEFT,
+                  "RIGHT": pygame.K_RIGHT}[blocked])
+    assert app.notice.startswith("Blocked") and s.state.turn == 1  # no turn used
     app.draw()
 
 

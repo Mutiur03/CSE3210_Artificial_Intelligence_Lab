@@ -199,6 +199,7 @@ class App:
         self.overlay = {"path": False, "explored": False}
         self.fuzzy_role: str | None = None
         self.paused = False
+        self.notice = ""  # one-line feedback for the last human key (blocked move)
         self.speed = 2  # index into SPEEDS
         self.last_step = 0.0
         self.running = True
@@ -279,6 +280,7 @@ class App:
                                self.trace)
         self.fuzzy_role = None
         self.paused = False
+        self.notice = ""
         self.scene = "game" if self.session.state.winner is None else "end"
 
     def open_demo(self) -> None:
@@ -288,16 +290,19 @@ class App:
         self.demo = Demo(maze, self.fonts, self.seed)
         self.scene = "demo"
 
-    def game_key(self, key: int, shift: bool = False) -> None:
-        """Game keys. A also means LEFT (WASD) when playing, so the path overlay is
-        Tab or Shift+A there; plain A works in spectator mode."""
+    def game_key(self, key: int) -> None:
+        """Game keys. In human games A and the arrows are movement; the AI overlays
+        (path, explored, fuzzy) are spectator tools and stay off there, because they
+        would show the opponent's planned route."""
         s = self.session
         assert s is not None
         if key == pygame.K_ESCAPE:
             self.scene = "menu"
         elif key == pygame.K_F2:
             self.open_demo()
-        elif key == pygame.K_TAB or key == pygame.K_a and (s.human is None or shift):
+        elif s.human is not None and key in (pygame.K_TAB, pygame.K_e, pygame.K_f):
+            pass  # AI plans and inputs are not shown to a human player (fair fog)
+        elif key == pygame.K_TAB or key == pygame.K_a and s.human is None:
             self.overlay["path"] = not self.overlay["path"]
         elif key == pygame.K_e:
             self.overlay["explored"] = not self.overlay["explored"]
@@ -315,7 +320,8 @@ class App:
         elif key in (pygame.K_MINUS, pygame.K_KP_MINUS):
             self.speed = max(0, self.speed - 1)
         elif key in MOVE_KEYS and s.human is not None and not self.paused:
-            s.human_move(MOVE_KEYS[key])
+            moved = s.human_move(MOVE_KEYS[key])
+            self.notice = "" if moved else "Blocked (wall, or stunned): no turn used"
         if s.state.winner is not None:
             self.scene = "end"
 
@@ -365,7 +371,7 @@ class App:
             if self.scene == "menu":
                 self.menu_key(ev.key, ev.unicode)
             elif self.scene == "game":
-                self.game_key(ev.key, bool(ev.mod & pygame.KMOD_SHIFT))
+                self.game_key(ev.key)
             elif self.scene == "end":
                 keys = {pygame.K_r: 0, pygame.K_n: 1, pygame.K_m: 2, pygame.K_ESCAPE: 2}
                 if ev.key in keys:
@@ -403,8 +409,11 @@ class App:
         viewer = make_observation(st, s.human) if s.human else None
         tints = None if s.human else {r: make_observation(st, r).visible_cells
                                       for r in (TOM, JERRY)}
+        ai_shown = s.human is None  # AI plans, inputs and panels are for spectators only
 
         def overlays(g: ui.Geometry) -> None:
+            if not ai_shown:
+                return
             for d in s.decisions.values():
                 if self.overlay["explored"]:
                     ui.shade_cells(self.screen, g, d.explored, C.COLOR_EXPLORED, 70)
@@ -413,7 +422,7 @@ class App:
                     ui.draw_path(self.screen, g, d.path)
 
         ui.draw_board(self.screen, self.fonts, st, viewer, tints, under=overlays)
-        if self.fuzzy_role is not None and self.fuzzy_role in s.decisions:
+        if ai_shown and self.fuzzy_role is not None and self.fuzzy_role in s.decisions:
             d = s.decisions[self.fuzzy_role]
             system = CONTROLLERS[self.fuzzy_role]
             if d.fuzzy_inputs is not None:
@@ -428,13 +437,13 @@ class App:
         if s.trace:
             right = f"trace {s.saved}  " + right
         ui.draw_top_bar(self.screen, self.fonts, st, middle, right)
-        ais = [s.ai_view(r) for r in (TOM, JERRY) if r in s.agents]
+        ais = [s.ai_view(r) for r in (TOM, JERRY) if r in s.agents] if ai_shown else []
         flags = " ".join(k for k, on in (("A", self.overlay["path"]),
                                          ("E", self.overlay["explored"]),
                                          ("F", self.fuzzy_role is not None), ("T", s.trace)) if on)
         if s.human:
-            footer = ["WASD / arrows move, Space wait, Tab path, E explored, F fuzzy",
-                      f"T trace, P pause, F2 demo, Esc menu   [{flags or 'no overlays'}]"]
+            footer = [self.notice or "WASD / arrows move, Space wait, P pause, Esc menu",
+                      "T trace. AI plans stay hidden in human games; watch AI vs AI"]
         else:
             footer = ["P pause, N step, +/- speed, Tab/A path, E explored, F fuzzy",
                       f"T trace, F2 demo, Esc menu   [{flags or 'no overlays'}]"]

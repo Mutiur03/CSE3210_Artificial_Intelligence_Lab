@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import config as C  # noqa: E402
+import config as C  # noqa: E402, F401  (re-exported: build_*.py read K.C)
 
 DOCS = ROOT / "docs"
 SCEN = DOCS / "scenario"
@@ -240,5 +240,3 @@ def bench_table() -> list[list[str]]:
     return first_table(sec["Search benchmark"])
 
 
-def config_value(name: str) -> object:
-    return getattr(C, name)

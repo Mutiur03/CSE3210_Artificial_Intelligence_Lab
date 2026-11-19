@@ -315,11 +315,6 @@ def end_of_round(state: GameState) -> list[Event]:
     return out
 
 
-def check_winner(state: GameState) -> str | None:
-    """JERRY, TOM or None while the game is running."""
-    return state.winner
-
-
 Policy = Callable[[Observation], str]
 
 
@@ -360,7 +355,7 @@ def make_observation(state: GameState, role: str) -> Observation:
         bruno=(b.pos, b.state) if b is not None and b.pos in visible else None,
         visible_cells=visible,
         events=tuple(e.text for e in state.events if e.turn >= since and role in e.audience),
-        maze=maze,
+        maze=maze.public,
     )
 
 

@@ -167,7 +167,10 @@ def draw_board(surf: pygame.Surface, fonts: Fonts, state: GameState,
     sees = viewer.visible_cells if viewer is not None else None
     b = state.bruno
     if b is not None and (sees is None or b.pos in sees):
-        draw_bruno(surf, fonts, g.center(b.pos), g.tile, b.state == SLEEP)
+        bx, by = g.center(b.pos)
+        if b.pos in (state.tom, state.jerry):  # sharing a cell: nudge him so he stays visible
+            bx, by = bx + g.tile // 4, by + g.tile // 4
+        draw_bruno(surf, fonts, (bx, by), g.tile, b.state == SLEEP)
     if sees is None or state.tom in sees:
         draw_tom(surf, g.center(state.tom), g.tile, state.tom_stun)
     if sees is None or state.jerry in sees:
@@ -344,8 +347,9 @@ def draw_ai_block(surf: pygame.Surface, fonts: Fonts, v: AIView, x: int, y: int,
         text(surf, fonts.tiny, f"centroid {v.fuzzy.centroid:.1f}", (x, y), C.COLOR_TEXT_DIM)
         y += 16
     else:
-        text(surf, fonts.tiny, "EASY: no fuzzy logic (scripted greedy)", (x, y + 2),
-             C.COLOR_TEXT_DIM)
+        note = ("EASY: no fuzzy logic (greedy)" if v.difficulty == "EASY"
+                else "fuzzy mode from the first move")
+        text(surf, fonts.tiny, note, (x, y + 2), C.COLOR_TEXT_DIM)
         y += 18
     text(surf, fonts.small, fit(fonts.small, v.belief, w), (x, y))
     return y + 22
@@ -524,9 +528,9 @@ HELP_STEPS = [
     "5. Step on the kennel to wake Bruno (twice per game): he guards Jerry and bites Tom.",
 ]
 HELP_KEYS = [
-    "WASD / arrows move, Space wait.  Tab (or Shift+A; A when watching) path overlay,",
-    "E explored cells, F fuzzy panel, T save AI traces, P pause, N single step,",
-    "+ / - speed, F2 algorithm demo, Esc menu",
+    "WASD / arrows move, Space wait, P pause, T save AI traces, F2 algorithm demo, Esc menu.",
+    "Human games hide the AI's plans and fuzzy inputs. Watch AI vs AI for Tab path,",
+    "E explored cells, F fuzzy panel, N single step, + / - speed.",
 ]
 
 
