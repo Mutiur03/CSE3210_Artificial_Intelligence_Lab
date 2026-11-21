@@ -6,6 +6,7 @@ results/demo_seeds.json (scripts/find_demo_seeds.py).
 
 Usage: python record.py [--only bruno_saves_jerry,full_game] [--out videos]
        python record.py --seed 5 --from 0 --to 40 --name custom   (HARD vs HARD)
+       python record.py --seed 5 --tom hard --jerry normal --name clip
 """
 
 from __future__ import annotations
@@ -100,10 +101,13 @@ def main_() -> None:
     p.add_argument("--from", dest="first", type=int, default=0)
     p.add_argument("--to", dest="last", type=int, default=C.TURN_LIMIT + 1)
     p.add_argument("--name", default="custom")
+    p.add_argument("--tom", default="hard", choices=["easy", "normal", "hard", "nightmare"])
+    p.add_argument("--jerry", default="hard", choices=["easy", "normal", "hard", "nightmare"])
     args = p.parse_args()
     out = Path(args.out)
     if args.seed is not None:
-        n = record(args.seed, args.first, args.last, out / f"{args.name}.mp4", FPS, {})
+        n = record(args.seed, args.first, args.last, out / f"{args.name}.mp4", FPS, {},
+                   args.tom, args.jerry)
         print(f"{out / (args.name + '.mp4')}: {n} frames")
         return
     seeds = json.loads(SEEDS_FILE.read_text(encoding="utf-8"))

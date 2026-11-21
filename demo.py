@@ -494,8 +494,13 @@ class Demo:
                     f"UCB {child.ucb(n_root, C.MCTS_UCB_C):.2f}", (x + 150, y + 2),
                     C.COLOR_TEXT_DIM)
             y += 40
-        self.panel(surf, [("#", "controls"), ("", "Left click Jerry's last seen cell,"),
-                          ("", "right click Tom. Re-runs 300 iterations.")], y)
+        help_lines = [("#", "controls"), ("", "Left click Jerry's last seen cell,"),
+                      ("", "right click Tom. Re-runs 300 iterations.")]
+        if not any(child.wins for child in mc.children):
+            help_lines += [("#", "why every win rate is 0"),
+                           ("", "No 20-turn playout let Tom catch Jerry: he is too"),
+                           ("", "far. Right-click Tom closer to see the bars differ.")]
+        self.panel(surf, help_lines, y)
 
     # ---- fuzzy sliders
     def draw_fuzzy(self, surf: pygame.Surface) -> None:

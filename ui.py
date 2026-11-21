@@ -351,8 +351,10 @@ def draw_ai_block(surf: pygame.Surface, fonts: Fonts, v: AIView, x: int, y: int,
                 else "fuzzy mode from the first move")
         text(surf, fonts.tiny, note, (x, y + 2), C.COLOR_TEXT_DIM)
         y += 18
-    text(surf, fonts.small, fit(fonts.small, v.belief, w), (x, y))
-    return y + 22
+    for part in v.belief.split(";"):  # "memory; Bruno state": one row each, never clipped
+        text(surf, fonts.small, fit(fonts.small, part.strip(), w), (x, y))
+        y += 20
+    return y + 2
 
 
 def section(surf: pygame.Surface, fonts: Fonts, title: str, lines: list[str], x: int,

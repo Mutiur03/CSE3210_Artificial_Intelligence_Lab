@@ -6,7 +6,7 @@ Jerry believes about Bruno). Minimax and MCTS run on `game.belief_state`, a
 local sub-game rebuilt from the observation plus that memory.
 
 Difficulty (4.2):
-  EASY       greedy best-first, no fuzzy logic
+  EASY       no fuzzy logic: Tom greedy best-first, Jerry IDDFS
   NORMAL     fuzzy mode each turn -> A* / bidirectional BFS / DFS (Jerry: no DLS)
   HARD       NORMAL + minimax alpha-beta at close range (Jerry also DLS evade)
   NIGHTMARE  HARD + MCTS strategic target every 5 turns
@@ -45,11 +45,19 @@ from search import (
     dls_safe_paths,
     flood_fill_count,
     greedy_best_first,
+    iddfs,
 )
 
 EASY, NORMAL, HARD, NIGHTMARE = "EASY", "NORMAL", "HARD", "NIGHTMARE"
 DIFFICULTIES = (EASY, NORMAL, HARD, NIGHTMARE)
+# Shown in the UI instead of the level: the algorithm each role leans on at that level.
+# Tom and Jerry never share a label at the same level.
+ALGO_LABEL = {
+    "TOM": {EASY: "Greedy", NORMAL: "A*+Bidir", HARD: "Minimax", NIGHTMARE: "MCTS ambush"},
+    "JERRY": {EASY: "IDDFS", NORMAL: "Danger A*", HARD: "DLS", NIGHTMARE: "MCTS keys"},
+}
 BUDGET_MS = {HARD: C.HARD_MS_BUDGET, NIGHTMARE: C.NIGHTMARE_MS_BUDGET}
+NEVER = -10**9  # seen_at value of a cell Tom has never seen (older than any stale limit)
 
 
 @dataclass
@@ -189,6 +197,9 @@ class _AIAgent(Agent):
         self.difficulty = difficulty
         self.name = f"{self.role.title()} {difficulty}"
         self.last_seen: tuple[Cell, int] | None = None  # opponent memory
+        self.start: Cell | None = None  # own first cell: stable root for SWEEP
+        self.here: Cell | None = None  # own cell last turn and the one before it
+        self.prev: Cell | None = None
         self.saw_last_turn = False
         self.newly_seen = False
         self.plan_target: Cell | None = None  # MCTS strategic choice (NIGHTMARE)
@@ -196,7 +207,11 @@ class _AIAgent(Agent):
         self.plan_used = -1  # last turn the planning mode was active
 
     def remember(self, obs: Observation) -> None:
-        """Update memory from `obs` (last sighting, newly-seen flag)."""
+        """Update memory from `obs` (last sighting, newly-seen flag, own trail)."""
+        if self.start is None:
+            self.start = obs.self_pos
+        if obs.self_pos != self.here:
+            self.prev, self.here = self.here, obs.self_pos
         self.newly_seen = obs.opp_pos is not None and not self.saw_last_turn
         if obs.opp_pos is not None:
             self.last_seen = (obs.opp_pos, obs.turn)
@@ -280,6 +295,7 @@ class TomAgent(_AIAgent):
         self.fuzzy = TomController()
         self.seen_at: dict[Cell, int] = {}  # cell -> last turn Tom saw it (SWEEP)
         self.known_keys: frozenset[Cell] | None = None
+        self.ambush_waits = 0  # consecutive AMBUSH waits since Tom last saw Jerry
 
     def remember(self, obs: Observation) -> None:
         """Opponent memory and seen-cell map. HARD+ also infers: a key that vanished since
@@ -322,7 +338,15 @@ class TomAgent(_AIAgent):
             handlers: dict[str, Callable[[Observation], Plan]] = {
                 "HUNT": self.hunt, "AMBUSH": self.ambush, "SWEEP": self.sweep,
                 "RETREAT": self.retreat}
-            plan = handlers[fz.mode](obs)
+            if fz.mode == "AMBUSH" and self.ambush_waits >= C.AMBUSH_MAX_WAIT:
+                plan = self.sweep(obs)  # waited long enough with no sign of Jerry: look for her
+                plan.algorithm += " (ambush wait limit)"
+            else:
+                plan = handlers[fz.mode](obs)
+                if fz.mode == "AMBUSH" and plan.action == "WAIT":
+                    self.ambush_waits += 1
+        if obs.opp_pos is not None:
+            self.ambush_waits = 0
         return self.decision(obs, t0, fz.mode, plan, fz, inputs, extra)
 
     # ---- modes
@@ -333,7 +357,9 @@ class TomAgent(_AIAgent):
         if target is None and self.last_seen and self.last_seen[0] != obs.self_pos:
             target = self.last_seen[0]
         if target is None:
-            action = self.rng.choice(moves_from(obs.maze, obs.self_pos))
+            moves = [a for a in moves_from(obs.maze, obs.self_pos) if a != "WAIT"]
+            ahead = [a for a in moves if step(obs.self_pos, a) != self.prev] or moves
+            action = self.rng.choice(ahead)  # walks on; turns back only in a dead end
             return Plan(action, "Random walk", 1, [obs.self_pos, step(obs.self_pos, action)])
         res = greedy_best_first(obs.maze.adj, obs.self_pos, target, trace=self.trace)
         return _path_plan(res.path, obs.self_pos, "Greedy best-first", res.nodes_expanded,
@@ -389,19 +415,27 @@ class TomAgent(_AIAgent):
                 stop = ahead[-1]
         plan = _path_plan(path[:stop + 1], me, "Bidirectional BFS", res.nodes_expanded,
                           res.explored_order, res.trace)
+        if plan.action == "WAIT":  # reached the ambush cell: say so, he is not frozen
+            plan.algorithm = f"Bidirectional BFS: waiting in ambush at {me}"
         return plan
 
     def sweep(self, obs: Observation) -> Plan:
         """SWEEP: DFS order over the maze, rooted at Jerry's last seen cell (so cells
         near it come first); go to the first cell not seen for 20 turns (if none:
-        the least recently seen) along a BFS shortest path."""
+        the least recently seen) along a BFS shortest path. Never seen him: the root is
+        Tom's start cell, not his current cell. A root that moves with Tom reorders the
+        DFS every step and he paced back and forth."""
         maze, me = obs.maze, obs.self_pos
-        root = self.last_seen[0] if self.last_seen else me
+        root = self.last_seen[0] if self.last_seen else self.start or me
         order = dfs(maze.adj, root, trace=self.trace)
         stale = obs.turn - C.SWEEP_STALE_TURNS
-        cands = [c for c in order.explored_order if self.seen_at.get(c, -1) < stale]
+        cands = [c for c in order.explored_order if self.seen_at.get(c, NEVER) < stale]
+        # endgame: one key left or the exit open: Jerry's route is known, check it
+        must_visit = (set(obs.key_cells) if len(obs.key_cells) <= 1 else set()) | (
+            {obs.exit_cell} if obs.exit_open else set())
+        cands = [c for c in cands if c in must_visit] or cands
         target = cands[0] if cands else min(order.explored_order,
-                                            key=lambda c: self.seen_at.get(c, -1))
+                                            key=lambda c: self.seen_at.get(c, NEVER))
         route = bfs(maze.adj, me, target)
         traces = [order.trace] if order.trace else []
         return Plan(direction(me, route.path[1]) if len(route.path) > 1 else "WAIT",
@@ -488,10 +522,13 @@ class JerryAgent(_AIAgent):
         return min(sorted(obs.key_cells), key=lambda k: obs.maze.dist(obs.self_pos, k))
 
     def easy(self, obs: Observation) -> Plan:
-        """EASY: greedy best-first to the nearest remaining key, then the exit. No evasion."""
-        res = greedy_best_first(obs.maze.adj, obs.self_pos, self.goal(obs), trace=self.trace)
-        return _path_plan(res.path, obs.self_pos, "Greedy best-first", res.nodes_expanded,
-                          res.explored_order, res.trace)
+        """EASY: iterative-deepening DFS (shortest path, no heuristic) to the nearest
+        remaining key, then the exit. No evasion."""
+        res = iddfs(obs.maze.adj, obs.self_pos, self.goal(obs))
+        trace = {"type": "dfs", "order": [list(c) for c in res.explored_order],
+                 "path": [list(c) for c in res.path]} if self.trace else None
+        return _path_plan(res.path, obs.self_pos, "IDDFS", res.nodes_expanded,
+                          res.explored_order, trace)
 
     def cost_fn(self, obs: Observation, tom: Cell | None) -> Callable[[Cell], float] | None:
         """Danger cost: 4 * risk(cell) with risk = max(0, 6 - d_tom(cell)) / 6, plus 3 on

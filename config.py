@@ -44,6 +44,7 @@ MCTS_UCB_C = 1.4
 MCTS_PLAYOUT_TURNS = 20
 MCTS_REPLAN_TURNS = 5
 DLS_DEPTH = 5
+AMBUSH_MAX_WAIT = 6  # Tom waits at most this many turns in ambush before sweeping instead
 NORMAL_FLEE_RANGE = 2  # NORMAL EVADE: one-step flee only when Tom is this close, else A* to goal
 CLOSE_RANGE = 4
 # agent mode details (4.5)

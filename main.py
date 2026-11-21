@@ -24,7 +24,7 @@ import pygame  # noqa: E402
 
 import config as C  # noqa: E402
 import ui  # noqa: E402
-from agents import DIFFICULTIES, Decision, JerryAgent, RandomAgent, TomAgent, make_agent  # noqa: E402
+from agents import ALGO_LABEL, DIFFICULTIES, Decision, JerryAgent, RandomAgent, TomAgent, make_agent  # noqa: E402
 from demo import Demo  # noqa: E402
 from fuzzy import FuzzySystem, JerryController, TomController  # noqa: E402
 from game import (  # noqa: E402
@@ -171,7 +171,7 @@ class Session:
             f"Keys collected: {s.keys_taken}/{C.NUM_KEYS}",
             f"Bruno activations: {b.activations if b else 0}   Bites: {s.bites}",
             "Nodes searched:  " + "   ".join(nodes),
-            f"Tom {self.levels[TOM]}  vs  Jerry {self.levels[JERRY]}",
+            matchup(self.levels),
             f"Seed {self.seed}, size {self.size}",
         ]
 
@@ -207,7 +207,8 @@ class App:
     # ---------------------------------------------------------- menu
     def options(self) -> list[str]:
         seed = f"{self.seed_buf}_" if self.seed_buf is not None else str(self.seed)
-        return [f"Tom: {self.levels[TOM]}", f"Jerry: {self.levels[JERRY]}",
+        return [f"Tom: {ALGO_LABEL[TOM][self.levels[TOM]]}",
+                f"Jerry: {ALGO_LABEL[JERRY][self.levels[JERRY]]}",
                 f"Map size: {self.size}", f"Seed: {seed}",
                 f"Bruno: {'On' if self.bruno else 'Off'}"]
 
@@ -429,7 +430,7 @@ class App:
                 ui.draw_fuzzy_view(self.screen, self.fonts, pygame.Rect(0, C.TOP_BAR_H,
                                    C.BOARD_PX, C.BOARD_PX), system, d.fuzzy_inputs,
                                    system.evaluate(d.fuzzy_inputs))
-        middle = f"Tom {s.levels[TOM]} vs Jerry {s.levels[JERRY]}"
+        middle = matchup(s.levels)
         if s.human:
             right = f"You: {s.human.title()}"
         else:
@@ -465,6 +466,11 @@ class App:
             self.draw()
             pygame.display.flip()
             clock.tick(C.FPS)
+
+
+def matchup(levels: dict[str, str]) -> str:
+    """'Tom <algorithm> vs Jerry <algorithm>' for the end screen and the top bar."""
+    return f"Tom {ALGO_LABEL[TOM][levels[TOM]]} vs Jerry {ALGO_LABEL[JERRY][levels[JERRY]]}"
 
 
 def random_seed() -> int:

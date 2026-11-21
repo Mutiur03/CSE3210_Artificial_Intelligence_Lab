@@ -107,6 +107,20 @@ def test_capture_jerry_moves_into_tom() -> None:
     assert s.winner == TOM and s.reason == "Jerry ran into Tom"
 
 
+def test_open_exit_beats_capture() -> None:
+    s = corridor("HJE......T")
+    s.tom = s.maze.exit  # Tom blocks the open exit
+    apply_action(s, JERRY, "RIGHT")
+    assert s.winner == JERRY and s.reason == "Jerry escaped through the exit"
+
+
+def test_locked_exit_still_capture() -> None:
+    s = corridor("HJE.....K....T")
+    s.tom = s.maze.exit
+    apply_action(s, JERRY, "RIGHT")
+    assert s.winner == TOM
+
+
 def test_capture_tom_moves_into_jerry() -> None:
     s = corridor("HJT....E")
     run_round(s, wait, lambda _o: "LEFT")

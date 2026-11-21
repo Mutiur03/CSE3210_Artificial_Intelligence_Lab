@@ -132,3 +132,54 @@ def test_evade_plan_finds_safe_path() -> None:
     assert ev.best_path and len(ev.best_path) == 6
     assert ev.action != "RIGHT"
     assert ev.trace["type"] == "dls" and ev.trace["safe_paths"] > 0
+
+
+@pytest.mark.parametrize("level", ["EASY", "NORMAL", "HARD"])
+def test_tom_leaves_his_start_when_jerry_is_unseen(level: str) -> None:
+    """Regression: SWEEP rooted its DFS at Tom's own cell and he paced UP/DOWN at the start;
+    EASY's random walk waited and froze in dead ends. Tom must travel in the opening."""
+    seeds = [1, 3, 5, 8, 9, 11, 14, 18, 20, 22]  # seeds that used to pace or freeze
+    for seed in seeds:
+        state = new_game(generate_maze(seed))
+        tom, jerry = make_agent(TOM, level, seed * 2 + 1), make_agent(JERRY, "NORMAL", seed * 2)
+        start, reach = state.tom, 0
+        for _ in range(12):
+            run_round(state, lambda o, j=jerry: j.act(o).action,
+                      lambda o, t=tom: t.act(o).action)
+            reach = max(reach, state.maze.dist(start, state.tom))
+            if state.winner is not None:
+                break
+        assert reach >= 4, (level, seed, reach)
+
+
+def test_sweep_checks_the_last_key_first() -> None:
+    """With one key left Jerry must come to it, so a Tom who lost her sweeps there first
+    (it used to sweep the nearest side branch while she walked to the key)."""
+    s = from_ascii("""
+        #####################
+        #T..........K......J#
+        #.###################
+        #E.......H..........#
+        #####################
+    """, keys_taken=2)
+    d = TomAgent("NORMAL", 0).act(make_observation(s, TOM))
+    assert d.mode == "SWEEP" and d.action == "RIGHT"  # toward the key, not down the side branch
+
+
+def test_ambush_wait_is_capped_and_labelled() -> None:
+    """Tom waits in ambush at most AMBUSH_MAX_WAIT turns with no sign of Jerry, saying so,
+    then sweeps (he used to stand still for 13 turns)."""
+    s = from_ascii("""
+        #############
+        #.TK.......J#
+        #E.......H..#
+        #############
+    """, keys_taken=2)
+    apply_action(s, TOM, "RIGHT")  # Tom stands on the last key; Jerry is out of sight
+    tom = TomAgent("HARD", 0)
+    tom.last_seen = ((1, 11), s.turn - 6)  # stale sighting: fuzzy picks AMBUSH
+    algos = [tom.act(make_observation(s, TOM)) for _ in range(agents.C.AMBUSH_MAX_WAIT + 2)]
+    cap = agents.C.AMBUSH_MAX_WAIT
+    assert all("waiting in ambush" in d.algorithm for d in algos[:cap])
+    assert all("ambush wait limit" in d.algorithm for d in algos[cap:])
+    assert all(d.mode == "AMBUSH" for d in algos)

@@ -206,7 +206,7 @@ def apply_action(state: GameState, role: str, action: str) -> list[Event]:
     new = step(pos_of(state, role), action)
     if role == JERRY:
         state.jerry = new
-        if new == state.tom:
+        if new == state.tom and not (state.exit_open and new == state.exit):  # exit beats capture
             _win(state, out, TOM, "Jerry ran into Tom")
             return out
         _jerry_lands(state, out)
