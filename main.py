@@ -31,16 +31,20 @@ from fuzzy import FuzzySystem, JerryController, TomController  # noqa: E402
 from game import (  # noqa: E402
     JERRY,
     TOM,
+    TRAP,
+    WHISTLE,
     Event,
     GameState,
     Observation,
     apply_action,
     end_of_round,
+    gadget_ready,
     legal_actions,
     make_observation,
     new_game,
     other,
     run_round,
+    use_gadget,
 )
 from maze import generate_maze  # noqa: E402
 
@@ -120,6 +124,14 @@ class Session:
             self.jerry_then_wait()
         return True
 
+    def human_gadget(self, kind: str) -> bool:
+        """Human Jerry's Q (trap) or E (whistle): spends her turn. False if not ready."""
+        if self.human != JERRY or not gadget_ready(self.state, kind):
+            return False
+        self.record(use_gadget(self.state, kind))
+        self.record(run_round(self.state, lambda _obs: "WAIT", self.policy(TOM)))
+        return True
+
     def jerry_then_wait(self) -> None:
         """Human-Tom mode: the AI Jerry moves; while Tom is stunned his turns pass."""
         while self.state.winner is None:
@@ -157,11 +169,15 @@ class Session:
         b = self.state.bruno
         if b is None:
             return ["Disabled"]
-        viewer = self.human
-        if viewer is not None and make_observation(self.state, viewer).bruno is None:
-            return ["Not in sight"]
-        return [f"{b.state} at {b.pos}   activations {b.activations}/2",
-                f"guard {b.guard_timer}   tired {b.tired_timer}   bite cooldown {b.bite_cooldown}"]
+        lines = [f"{b.state} at {b.pos}   activations {b.activations}/2",
+                 f"guard {b.guard_timer}   tired {b.tired_timer}   bite cooldown {b.bite_cooldown}"]
+        if self.human == JERRY:
+            if self.state.whistle_cd > 0:
+                whistle = f"cooldown {self.state.whistle_cd}"
+            else:
+                whistle = "ready" if gadget_ready(self.state, WHISTLE) else "Bruno out of reach"
+            lines.append(f"Q trap: {self.state.traps_left} left   E whistle: {whistle}")
+        return lines
 
     def stats(self) -> list[str]:
         s, b = self.state, self.state.bruno
@@ -303,6 +319,12 @@ class App:
             self.scene = "menu"
         elif key == pygame.K_F2:
             self.open_demo()
+        elif s.human == JERRY and key in (pygame.K_q, pygame.K_e) and not self.paused:
+            kind = TRAP if key == pygame.K_q else WHISTLE
+            if s.human_gadget(kind):
+                self.notice = ""
+            else:
+                self.notice = f"{kind.title()} not available now: no turn used"
         elif s.human is not None and key in (pygame.K_TAB, pygame.K_e, pygame.K_f):
             pass  # AI plans and inputs are not shown to a human player (fair fog)
         elif key == pygame.K_TAB or key == pygame.K_a and s.human is None:
@@ -423,9 +445,8 @@ class App:
     def draw_game(self, s: Session) -> None:
         self.screen.fill(C.COLOR_BG)
         st = s.state
-        viewer = make_observation(st, s.human) if s.human else None
-        tints = None if s.human else {r: make_observation(st, r).visible_cells
-                                      for r in (TOM, JERRY)}
+        # Tom (human or AI) learns the exit only after the alarm; the game is over = all shown.
+        exit_known = s.human != TOM or st.exit_open or st.winner is not None
         ai_shown = s.human is None  # AI plans, inputs and panels are for spectators only
 
         def overlays(g: ui.Geometry) -> None:
@@ -438,7 +459,7 @@ class App:
                 if self.overlay["path"]:
                     ui.draw_path(self.screen, g, d.path)
 
-        ui.draw_board(self.screen, self.fonts, st, viewer, tints, under=overlays)
+        ui.draw_board(self.screen, self.fonts, st, exit_known, under=overlays)
         if ai_shown and self.fuzzy_role is not None and self.fuzzy_role in s.decisions:
             d = s.decisions[self.fuzzy_role]
             system = CONTROLLERS[self.fuzzy_role]
@@ -459,7 +480,8 @@ class App:
                                          ("E", self.overlay["explored"]),
                                          ("F", self.fuzzy_role is not None), ("T", s.trace)) if on)
         if s.human:
-            footer = [self.notice or "WASD / arrows move, Space wait, P pause, Esc menu",
+            keys = "Q trap, E whistle, " if s.human == JERRY else ""
+            footer = [self.notice or f"WASD / arrows move, Space wait, {keys}P pause, Esc menu",
                       "T trace. AI plans stay hidden in human games; watch AI vs AI"]
         else:
             footer = ["P pause, N step, +/- speed, Tab/A path, E explored, F fuzzy",

@@ -215,6 +215,10 @@ class _AIAgent(Agent):
         self.newly_seen = obs.opp_pos is not None and not self.saw_last_turn
         if obs.opp_pos is not None:
             self.last_seen = (obs.opp_pos, obs.turn)
+        elif obs.opp_last_seen is not None and (
+            self.last_seen is None or obs.opp_last_seen[1] > self.last_seen[1]
+        ):
+            self.last_seen = obs.opp_last_seen  # scent pulse (game._scent) is a sighting too
         self.saw_last_turn = obs.opp_pos is not None
 
     def age(self, obs: Observation) -> int | None:

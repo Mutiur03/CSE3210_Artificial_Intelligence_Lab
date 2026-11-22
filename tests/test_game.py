@@ -9,16 +9,20 @@ from game import (
     SLEEP,
     TIRED,
     TOM,
+    TRAP,
+    WHISTLE,
     apply_action,
     bruno_step,
     end_of_round,
     from_ascii,
+    gadget_ready,
     invariant_errors,
     legal_actions,
     make_observation,
     new_game,
     render_ascii,
     run_round,
+    use_gadget,
 )
 from maze import generate_maze
 
@@ -355,3 +359,51 @@ def test_same_seed_same_game() -> None:
 
 def test_invariants_hold_initially() -> None:
     assert invariant_errors(new_game(generate_maze(1))) == []
+
+
+
+def test_trap_springs_on_tom_once() -> None:
+    state = from_ascii("#######\n#HJ.TE#\n#######", bruno=False)
+    state.traps = ((1, 3),)
+    apply_action(state, TOM, "LEFT")  # Tom steps (1,4) -> (1,3)
+    assert state.tom == (1, 3)
+    assert state.tom_stun == C.TRAP_STUN
+    assert state.traps == ()  # the trap is used up
+
+
+def test_trap_ignores_jerry_and_is_not_placed_on_exit() -> None:
+    state = from_ascii("#######\n#HJ.TE#\n#######", bruno=False)
+    assert gadget_ready(state, TRAP)
+    use_gadget(state, TRAP)
+    assert state.traps == ((1, 2),) and state.traps_left == C.TRAP_LIMIT - 1
+    apply_action(state, JERRY, "RIGHT")  # Jerry walks off her own trap: no stun
+    assert state.tom_stun == 0 and state.traps == ((1, 2),)
+    state.jerry = (1, 5)  # standing on the exit: no trap there
+    assert not gadget_ready(state, TRAP)
+
+
+def test_whistle_recalls_tired_bruno_and_cools_down() -> None:
+    state = from_ascii("########\n#J..THE#\n########", bruno_state=TIRED, tired_timer=9)
+    assert state.bruno is not None and state.bruno.pos == state.maze.kennel
+    state.bruno.pos = (1, 2)  # Bruno walking home, one cell from Jerry
+    assert gadget_ready(state, WHISTLE)
+    use_gadget(state, WHISTLE)
+    assert state.bruno.state == GUARD and state.bruno.guard_timer == C.BRUNO_GUARD_TURNS
+    assert state.whistle_cd == C.WHISTLE_COOLDOWN and not gadget_ready(state, WHISTLE)
+    end_of_round(state)
+    assert state.whistle_cd == C.WHISTLE_COOLDOWN - 1
+
+
+def test_scent_every_period_from_start_turn() -> None:
+    """Tom is out of vision (8 cells), so only the scent can tell him where Jerry is."""
+    state = from_ascii("############\n#JH......TE#\n############", bruno=False,
+                       turn=C.SCENT_START_TURN - 1)
+    assert state.last_seen[TOM] is None
+    end_of_round(state)  # turn becomes SCENT_START_TURN: first pulse
+    assert state.last_seen[TOM] == (state.jerry, C.SCENT_START_TURN)
+    state.last_seen[TOM] = None
+    state.turn = C.SCENT_START_TURN + C.SCENT_PERIOD - 2
+    end_of_round(state)  # turn becomes start + period - 1: no pulse
+    assert state.last_seen[TOM] is None
+    end_of_round(state)  # turn becomes start + period: pulse
+    assert state.last_seen[TOM] == (state.jerry, C.SCENT_START_TURN + C.SCENT_PERIOD)

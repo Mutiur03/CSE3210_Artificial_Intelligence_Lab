@@ -2,7 +2,7 @@
 view, menu, help and end screens.
 
 Pure drawing. No game rules here; everything shown comes from GameState,
-Observation, Decision and FuzzyResult objects passed in by main.py / demo.py.
+Decision and FuzzyResult objects passed in by main.py / demo.py.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import pygame
 
 import config as C
 from fuzzy import FuzzyResult, FuzzySystem
-from game import JERRY, SLEEP, TOM, GameState, Observation
+from game import JERRY, SLEEP, TOM, GameState
 from maze import Maze
 from search import Cell
 
@@ -142,44 +142,44 @@ def draw_path(surf: pygame.Surface, g: Geometry, path: list[Cell], color: Color 
             pygame.draw.circle(surf, color, g.center(c), max(2, g.tile // 7))
 
 
-def draw_board(surf: pygame.Surface, fonts: Fonts, state: GameState,
-               viewer: Observation | None, tints: dict[str, frozenset[Cell]] | None = None,
+def draw_board(surf: pygame.Surface, fonts: Fonts, state: GameState, exit_known: bool,
                g: Geometry | None = None, under: Callable[[Geometry], None] | None = None) -> None:
-    """Maze, features, fog and characters.
+    """Maze, features and all characters. No fog: everything on the board is drawn.
 
-    `viewer` = the human's observation: cells outside it are dimmed and the
-    opponent/Bruno are drawn only when visible. `tints` (spectator) colours each
-    role's vision instead. `under` draws overlays between floor and pieces.
+    `exit_known` = the viewer may see the exit (Tom only after the alarm; the
+    exit is hidden from him until then, a rule, not fog). `under` draws overlays
+    between floor and pieces.
     """
     maze = state.maze
     g = g or board_geometry(maze)
     pygame.draw.rect(surf, C.COLOR_BG, (C.BOARD_X, C.BOARD_Y, C.BOARD_PX, C.BOARD_PX))
     draw_maze(surf, maze, g)
-    if tints:
-        for role, cells in tints.items():
-            shade_cells(surf, g, cells, ROLE_COLORS[role] if role == TOM else C.COLOR_ACCENT, 70)
     if under is not None:
         under(g)
-    if viewer is not None:
-        hidden = [(r, c) for r in range(maze.rows) for c in range(maze.cols)
-                  if (r, c) not in viewer.visible_cells]
-        shade_cells(surf, g, hidden, (0, 0, 0), C.FOG_ALPHA)
     draw_kennel(surf, g.center(maze.kennel), g.tile)
-    if viewer is None or viewer.exit_cell is not None:
+    if exit_known:
         draw_exit(surf, g.center(maze.exit), g.tile, state.exit_open)
+    for t in state.traps:
+        draw_trap(surf, g.center(t), g.tile)
     for k in state.keys:
         draw_key(surf, g.center(k), g.tile)
-    sees = viewer.visible_cells if viewer is not None else None
     b = state.bruno
-    if b is not None and (sees is None or b.pos in sees):
+    if b is not None:
         bx, by = g.center(b.pos)
         if b.pos in (state.tom, state.jerry):  # sharing a cell: nudge him so he stays visible
             bx, by = bx + g.tile // 4, by + g.tile // 4
         draw_bruno(surf, fonts, (bx, by), g.tile, b.state == SLEEP)
-    if sees is None or state.tom in sees:
-        draw_tom(surf, g.center(state.tom), g.tile, state.tom_stun)
-    if sees is None or state.jerry in sees:
-        draw_jerry(surf, g.center(state.jerry), g.tile)
+    draw_tom(surf, g.center(state.tom), g.tile, state.tom_stun)
+    draw_jerry(surf, g.center(state.jerry), g.tile)
+
+
+def draw_trap(surf: pygame.Surface, ctr: tuple[int, int], t: int) -> None:
+    """Mouse trap: a red spring ring with a cross, drawn on the floor."""
+    cx, cy = ctr
+    r = t // 3
+    pygame.draw.circle(surf, C.COLOR_TRAP, ctr, r, 3)
+    pygame.draw.line(surf, C.COLOR_TRAP, (cx - r // 2, cy - r // 2), (cx + r // 2, cy + r // 2), 2)
+    pygame.draw.line(surf, C.COLOR_TRAP, (cx - r // 2, cy + r // 2), (cx + r // 2, cy - r // 2), 2)
 
 
 def draw_key(surf: pygame.Surface, ctr: tuple[int, int], t: int) -> None:
@@ -534,11 +534,12 @@ HELP_STEPS = [
     "3. Walk onto the open exit to win. Tom wins if he catches Jerry or turn 120 passes.",
     "4. Both see only 5 steps along corridors. Tom smells the keys, not Jerry.",
     "5. Step on the kennel to wake Bruno (twice per game): he guards Jerry and bites Tom.",
+    "6. From turn 60 Tom sniffs you out every 10 turns. Stay moving, or be found.",
 ]
 HELP_KEYS = [
-    "WASD / arrows move, Space wait, P pause, T save AI traces, F2 algorithm demo, Esc menu.",
+    "WASD / arrows move, Space wait, Q set a mouse trap, E whistle Bruno back, P pause, Esc menu.",
     "Human games hide the AI's plans and fuzzy inputs. Watch AI vs AI for Tab path,",
-    "E explored cells, F fuzzy panel, N single step, + / - speed.",
+    "E explored cells, F fuzzy panel, N single step, + / - speed, T save AI traces.",
 ]
 
 
@@ -547,7 +548,7 @@ def draw_help(surf: pygame.Surface, fonts: Fonts) -> None:
     shade = pygame.Surface((C.WINDOW_W, C.WINDOW_H), pygame.SRCALPHA)
     shade.fill((0, 0, 0, 190))
     surf.blit(shade, (0, 0))
-    box = pygame.Rect(0, 0, 860, 420)
+    box = pygame.Rect(0, 0, 860, 470)
     box.center = (C.WINDOW_W // 2, C.WINDOW_H // 2)
     pygame.draw.rect(surf, C.COLOR_PANEL, box, border_radius=16)
     pygame.draw.rect(surf, C.COLOR_PANEL_LINE, box, 2, border_radius=16)
@@ -555,7 +556,7 @@ def draw_help(surf: pygame.Surface, fonts: Fonts) -> None:
     for i, line in enumerate(HELP_STEPS):
         text(surf, fonts.normal, line, (box.x + 40, box.y + 80 + i * 40))
     for i, line in enumerate(HELP_KEYS):
-        text(surf, fonts.small, line, (box.x + 40, box.y + 292 + i * 24), C.COLOR_TEXT_DIM)
+        text(surf, fonts.small, line, (box.x + 40, box.y + 342 + i * 24), C.COLOR_TEXT_DIM)
     text(surf, fonts.small, "Press any key to close", (box.centerx, box.bottom - 30),
          C.COLOR_TEXT_DIM, center=True)
 

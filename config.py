@@ -33,6 +33,13 @@ BRUNO_BITE_RANGE = 1
 BRUNO_BITE_STUN = 3
 BRUNO_BITE_COOLDOWN = 4
 
+# ---------------------------------------------------------------- pressure (3.9, 3.10)
+SCENT_START_TURN = 50  # from this turn Tom gets a scent of Jerry (see game.end_of_round)
+SCENT_PERIOD = 8  # every this many turns after SCENT_START_TURN
+TRAP_LIMIT = 2  # mouse traps Jerry can set per game (human Jerry only)
+TRAP_STUN = 2  # Tom's stun when he springs a trap
+WHISTLE_COOLDOWN = 8  # turns between two whistles
+
 # ---------------------------------------------------------------- AI (4.x, used from phase 2)
 HARD_MS_BUDGET = 100
 NIGHTMARE_MS_BUDGET = 300
@@ -77,7 +84,6 @@ PANEL_X = BOARD_PX
 PANEL_W = WINDOW_W - PANEL_X  # 544
 FONT_NAMES = ("bahnschrift", "segoeui", "arial")  # first installed family wins; else pygame default
 EVENT_LOG_LINES = 6
-FOG_ALPHA = 165  # 65% black
 
 # palette
 COLOR_BG = (18, 22, 32)
@@ -96,6 +102,7 @@ COLOR_TOM = (0xF3, 0x8B, 0x2A)
 COLOR_JERRY = (0xA8, 0xA8, 0xB0)
 COLOR_JERRY_EAR = (0xE8, 0xA0, 0xA8)
 COLOR_BRUNO = (0x6D, 0x4C, 0x41)
+COLOR_TRAP = (0xE5, 0x39, 0x35)
 COLOR_SPIKE = (0xE0, 0xE0, 0xE0)
 COLOR_STAR = (0xFF, 0xF0, 0x80)
 COLOR_ACCENT = (0x4F, 0xA3, 0xF7)

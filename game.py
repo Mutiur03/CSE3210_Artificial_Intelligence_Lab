@@ -18,6 +18,7 @@ TOM = "TOM"
 ROLES = (JERRY, TOM)
 SLEEP, GUARD, CHASE_CAT, TIRED = "SLEEP", "GUARD", "CHASE_CAT", "TIRED"
 BRUNO_STATES = (SLEEP, GUARD, CHASE_CAT, TIRED)
+TRAP, WHISTLE = "TRAP", "WHISTLE"  # Jerry's gadgets (use_gadget)
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,9 @@ class GameState:
     winner: str | None = None
     reason: str = ""
     bites: int = 0
+    traps: tuple[Cell, ...] = ()  # mouse traps on the floor (set by human Jerry only)
+    traps_left: int = C.TRAP_LIMIT
+    whistle_cd: int = 0  # turns until Jerry may whistle for Bruno again
     last_seen: dict[str, tuple[Cell, int] | None] = field(
         default_factory=lambda: {JERRY: None, TOM: None}
     )
@@ -75,6 +79,7 @@ class GameState:
             exit=self.exit,
             keys_taken=self.keys_taken, exit_open=self.exit_open, tom_stun=self.tom_stun,
             turn=self.turn, winner=self.winner, reason=self.reason, bites=self.bites,
+            traps=self.traps, traps_left=self.traps_left, whistle_cd=self.whistle_cd,
             last_seen=dict(self.last_seen),
             events=list(self.events) if history else [],
             action_log=list(self.action_log) if history else [],
@@ -215,7 +220,56 @@ def apply_action(state: GameState, role: str, action: str) -> list[Event]:
         if new == state.jerry:
             _win(state, out, TOM, "Tom caught Jerry")
             return out
+        if new in state.traps:
+            state.traps = tuple(t for t in state.traps if t != new)
+            state.tom_stun = C.TRAP_STUN
+            _emit(state, out, f"Tom springs a mouse trap! Stunned {C.TRAP_STUN} turns",
+                  frozenset(ROLES))
     _update_sightings(state)
+    return out
+
+
+def gadget_ready(state: GameState, kind: str) -> bool:
+    """Can Jerry use `kind` ("TRAP" or "WHISTLE") this turn? See use_gadget()."""
+    if state.winner is not None:
+        return False
+    b = state.bruno
+    if kind == TRAP:
+        return (
+            state.traps_left > 0 and state.jerry not in state.traps
+            and state.jerry != state.maze.exit
+        )
+    if kind == WHISTLE:
+        return (
+            state.whistle_cd == 0 and b is not None and b.state in (GUARD, TIRED)
+            and state.maze.dist(state.jerry, b.pos) <= C.VISION_RADIUS
+        )
+    raise ValueError(f"unknown gadget {kind}")
+
+
+def use_gadget(state: GameState, kind: str) -> list[Event]:
+    """Jerry spends her turn on a gadget instead of moving (Tom then acts as usual).
+
+    TRAP: a mouse trap on Jerry's cell; it springs when Tom steps on it (stun, then
+    removed). Tom's AI does not know traps, so it walks into them like any cell.
+    WHISTLE: Bruno, if he is guarding or walking home within vision, goes back to
+    GUARD with a fresh guard timer (no teleport, he still walks). Free of the two
+    wake-up activations.
+    """
+    if not gadget_ready(state, kind):
+        raise ValueError(f"gadget {kind} not ready for Jerry at turn {state.turn}")
+    state.action_log.append((state.turn, JERRY, kind))
+    out: list[Event] = []
+    if kind == TRAP:
+        state.traps += (state.jerry,)
+        state.traps_left -= 1
+        _emit(state, out, f"You set a mouse trap ({state.traps_left} left)", frozenset({JERRY}))
+    else:
+        b = state.bruno
+        assert b is not None
+        b.state, b.guard_timer = GUARD, C.BRUNO_GUARD_TURNS
+        state.whistle_cd = C.WHISTLE_COOLDOWN
+        _emit(state, out, "You whistle: Bruno comes back to guard you", frozenset({JERRY}))
     return out
 
 
@@ -302,14 +356,30 @@ def _tick_bruno(state: GameState, out: list[Event]) -> None:
             _emit(state, out, "Bruno fell asleep in the kennel", _witnesses(state, b.pos))
 
 
+def _scent(state: GameState, out: list[Event]) -> None:
+    """Pressure from turn SCENT_START_TURN: every SCENT_PERIOD turns Tom smells Jerry.
+
+    Tom's memory of her cell is refreshed (he may then hunt it), so a Jerry who
+    hides for a long time is found. Deterministic: no randomness.
+    """
+    since = state.turn - C.SCENT_START_TURN
+    if since < 0 or since % C.SCENT_PERIOD != 0:
+        return
+    state.last_seen[TOM] = (state.jerry, state.turn)
+    _emit(state, out, f"Tom sniffs you out at {state.jerry}", frozenset({TOM}))
+    _emit(state, out, "Tom is onto your scent!", frozenset({JERRY}))
+
+
 def end_of_round(state: GameState) -> list[Event]:
-    """Bruno acts, timers tick, turn advances, turn limit checked."""
+    """Bruno acts, timers tick, scent pulse, turn advances, turn limit checked."""
     out: list[Event] = []
     if state.winner is not None:
         return out
     out += bruno_step(state)
     _tick_bruno(state, out)
+    state.whistle_cd = max(0, state.whistle_cd - 1)
     state.turn += 1
+    _scent(state, out)
     if state.turn > C.TURN_LIMIT:
         _win(state, out, TOM, f"Time is up ({C.TURN_LIMIT} turns)")
     return out
