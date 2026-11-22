@@ -449,7 +449,7 @@ class App:
         exit_known = s.human != TOM or st.exit_open or st.winner is not None
         ai_shown = s.human is None  # AI plans, inputs and panels are for spectators only
 
-        def overlays(g: ui.Geometry) -> None:
+        def overlays(g: ui.Grid) -> None:
             if not ai_shown:
                 return
             for d in s.decisions.values():

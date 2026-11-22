@@ -8,3 +8,6 @@ python-pptx
 python-docx
 pytest
 ruff
+moderngl
+trimesh
+scipy

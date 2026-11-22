@@ -25,6 +25,7 @@ import pygame  # noqa: E402
 
 import config as C  # noqa: E402
 import main  # noqa: E402
+import render3d  # noqa: E402
 
 SEEDS_FILE = Path("results/demo_seeds.json")
 FPS = 8
@@ -56,6 +57,7 @@ def record(
 ) -> int:
     """Play a seeded AI-vs-AI game; write a frame after each round whose turn is in
     [first, last]. Returns the number of frames written."""
+    render3d.TWEEN_S = 0  # each frame shows the finished move
     pygame.init()
     screen = pygame.display.set_mode((C.WINDOW_W, C.WINDOW_H))
     app = main.App(

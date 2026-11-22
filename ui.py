@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 import pygame
 
 import config as C
+import render3d
 from fuzzy import FuzzyResult, FuzzySystem
 from game import JERRY, SLEEP, TOM, GameState
 from maze import Maze
@@ -97,9 +98,16 @@ class Geometry:
         return pygame.Rect(self.ox + cell[1] * self.tile, self.oy + cell[0] * self.tile,
                            self.tile, self.tile)
 
+    def quad(self, cell: Cell) -> list[tuple[int, int]]:
+        r = self.rect(cell)
+        return [r.topleft, r.topright, r.bottomright, r.bottomleft]
+
     def cell_at(self, pos: tuple[int, int], maze: Maze) -> Cell | None:
         c, r = (pos[0] - self.ox) // self.tile, (pos[1] - self.oy) // self.tile
         return (r, c) if (r, c) in maze.floor else None
+
+
+Grid = Geometry | render3d.Grid3D  # what overlays draw on: the 2D board or the projected 3D floor
 
 
 def board_geometry(maze: Maze, area: pygame.Rect | None = None) -> Geometry:
@@ -123,16 +131,16 @@ def draw_maze(surf: pygame.Surface, maze: Maze, g: Geometry) -> None:
                 pygame.draw.rect(surf, C.COLOR_WALL_EDGE, (rect.x, rect.y, rect.w, edge))
 
 
-def shade_cells(surf: pygame.Surface, g: Geometry, cells: Iterable[Cell], color: Color,
+def shade_cells(surf: pygame.Surface, g: Grid, cells: Iterable[Cell], color: Color,
                 alpha: int) -> None:
-    """Translucent fill over each cell."""
-    tile = pygame.Surface((g.tile, g.tile), pygame.SRCALPHA)
-    tile.fill((*color, alpha))
+    """Translucent fill over each cell (a projected quad on the 3D board)."""
+    layer = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
     for cell in cells:
-        surf.blit(tile, g.rect(cell))
+        pygame.draw.polygon(layer, (*color, alpha), g.quad(cell))
+    surf.blit(layer, (0, 0))
 
 
-def draw_path(surf: pygame.Surface, g: Geometry, path: list[Cell], color: Color = C.COLOR_PATH,
+def draw_path(surf: pygame.Surface, g: Grid, path: list[Cell], color: Color = C.COLOR_PATH,
               dots: bool = True) -> None:
     """Planned path: a thin line through the cells plus a dot on each cell."""
     if len(path) > 1:
@@ -143,7 +151,7 @@ def draw_path(surf: pygame.Surface, g: Geometry, path: list[Cell], color: Color 
 
 
 def draw_board(surf: pygame.Surface, fonts: Fonts, state: GameState, exit_known: bool,
-               g: Geometry | None = None, under: Callable[[Geometry], None] | None = None) -> None:
+               g: Geometry | None = None, under: Callable[[Grid], None] | None = None) -> None:
     """Maze, features and all characters. No fog: everything on the board is drawn.
 
     `exit_known` = the viewer may see the exit (Tom only after the alarm; the
@@ -151,8 +159,20 @@ def draw_board(surf: pygame.Surface, fonts: Fonts, state: GameState, exit_known:
     between floor and pieces.
     """
     maze = state.maze
-    g = g or board_geometry(maze)
     pygame.draw.rect(surf, C.COLOR_BG, (C.BOARD_X, C.BOARD_Y, C.BOARD_PX, C.BOARD_PX))
+    r3d = render3d.get_renderer() if g is None else None
+    if r3d is not None:  # 3D scene rendered offscreen; overlays are drawn on top, projected
+        surf.blit(r3d.render(state, exit_known), (C.BOARD_X, C.BOARD_Y))
+        if under is not None:
+            under(r3d.grid)
+        for name, pos in r3d.labels.items():
+            rgb = tuple(int(255 * v) for v in render3d.ROLE_RGB[name])
+            chip(surf, fonts.tiny, render3d.LABEL[name], (pos[0] - 26, pos[1] - 12), rgb)
+        z = r3d.bruno_label_pos(state)
+        if z is not None:
+            text(surf, fonts.big, "z", z, C.COLOR_TEXT_DIM, center=True)
+        return
+    g = g or board_geometry(maze)
     draw_maze(surf, maze, g)
     if under is not None:
         under(g)
@@ -422,7 +442,7 @@ def draw_curve_box(surf: pygame.Surface, fonts: Fonts, rect: pygame.Rect, title:
                    marker: float | None, fill: list[tuple[int, float]] | None = None) -> None:
     """Membership curves of one variable on [lo, hi]; `marker` = crisp value line;
     `fill` = aggregated output shape (x, mu) drawn underneath."""
-    pygame.draw.rect(surf, (30, 36, 50), rect, border_radius=6)
+    pygame.draw.rect(surf, (238, 241, 247), rect, border_radius=6)
     text(surf, fonts.small, title, (rect.x + 8, rect.y + 4))
     plot = pygame.Rect(rect.x + 8, rect.y + 24, rect.w - 16, rect.h - 44)
 
@@ -432,7 +452,7 @@ def draw_curve_box(surf: pygame.Surface, fonts: Fonts, rect: pygame.Rect, title:
     pygame.draw.line(surf, C.COLOR_PANEL_LINE, plot.bottomleft, plot.bottomright)
     if fill:
         pts = [px(lo, 0)] + [px(x, mu) for x, mu in fill] + [px(hi, 0)]
-        pygame.draw.polygon(surf, (70, 90, 120), pts)
+        pygame.draw.polygon(surf, (190, 205, 228), pts)
     lx = rect.x + 8
     for name, mf, color in curves:
         n = 120
@@ -443,9 +463,9 @@ def draw_curve_box(surf: pygame.Surface, fonts: Fonts, rect: pygame.Rect, title:
         lx = lab.right + 10
     if marker is not None:
         mx = px(marker, 0)[0]
-        pygame.draw.line(surf, (255, 255, 255), (mx, plot.y), (mx, plot.bottom), 2)
+        pygame.draw.line(surf, (20, 24, 36), (mx, plot.y), (mx, plot.bottom), 2)
         text(surf, fonts.tiny, f"{marker:.2f}".rstrip("0").rstrip("."), (rect.right - 8,
-             rect.y + 6), (255, 255, 255), right=True)
+             rect.y + 6), (20, 24, 36), right=True)
 
 
 PALETTE = [(0x5D, 0xAD, 0xE2), (0xF5, 0xB0, 0x41), (0xE7, 0x4C, 0x3C), (0x58, 0xD6, 0x8D)]
@@ -456,7 +476,7 @@ def draw_fuzzy_view(surf: pygame.Surface, fonts: Fonts, rect: pygame.Rect, syste
                     selected: str | None = None) -> None:
     """Membership curves of every input (crisp value marked), rule strengths, the
     aggregated output with the centroid line, and the chosen mode."""
-    pygame.draw.rect(surf, (20, 25, 36), rect)
+    pygame.draw.rect(surf, C.COLOR_PANEL, rect)
     pygame.draw.rect(surf, C.COLOR_PANEL_LINE, rect, 1)
     text(surf, fonts.big, f"Fuzzy controller: {system.role.title()}", (rect.x + 14, rect.y + 10))
     names = list(system.inputs)
@@ -546,7 +566,7 @@ HELP_KEYS = [
 def draw_help(surf: pygame.Surface, fonts: Fonts) -> None:
     """How to Play overlay: 5 short steps plus the controls."""
     shade = pygame.Surface((C.WINDOW_W, C.WINDOW_H), pygame.SRCALPHA)
-    shade.fill((0, 0, 0, 190))
+    shade.fill((30, 36, 50, 150))
     surf.blit(shade, (0, 0))
     box = pygame.Rect(0, 0, 860, 470)
     box.center = (C.WINDOW_W // 2, C.WINDOW_H // 2)
@@ -565,7 +585,7 @@ def draw_end(surf: pygame.Surface, fonts: Fonts, winner: str, reason: str,
              stats: list[str], buttons: list[str]) -> list[pygame.Rect]:
     """Overlay box with winner, reason, stats and buttons; returns button rects."""
     shade = pygame.Surface((C.WINDOW_W, C.WINDOW_H), pygame.SRCALPHA)
-    shade.fill((0, 0, 0, 150))
+    shade.fill((30, 36, 50, 120))
     surf.blit(shade, (0, 0))
     box = pygame.Rect(0, 0, 600, 430)
     box.center = (C.WINDOW_W // 2, C.WINDOW_H // 2)
