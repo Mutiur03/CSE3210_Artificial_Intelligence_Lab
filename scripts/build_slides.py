@@ -1,4 +1,4 @@
-"""Build slides/cheese_heist.pptx (python-pptx, 16:9, dark theme) from the repo's real data.
+"""Build slides/cheese_heist.pptx (python-pptx, 16:9, light theme) from the repo's real data.
 
 Numbers come from results/experiments.json, results/demo_seeds.json, docs/scenario/*.md and
 config.py; images are docs/scenario/*.png, docs/screens/*.png and results/E*.png.

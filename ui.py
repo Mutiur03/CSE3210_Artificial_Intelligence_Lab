@@ -60,6 +60,16 @@ def text(surf: pygame.Surface, font: pygame.font.Font, s: str, pos: tuple[int, i
     return rect
 
 
+def text_box(surf: pygame.Surface, font: pygame.font.Font, s: str, pos: tuple[int, int],
+             color: Color, center: bool = False) -> pygame.Rect:
+    """Text on a panel-coloured plate, so lines and edges do not run through it."""
+    img = font.render(s, True, color)
+    rect = img.get_rect(center=pos) if center else img.get_rect(topleft=pos)
+    surf.fill(C.COLOR_PANEL, rect.inflate(6, 2))
+    surf.blit(img, rect)
+    return rect
+
+
 def fit(font: pygame.font.Font, s: str, width: int) -> str:
     """Cut `s` with '..' so it renders within `width` pixels."""
     if font.size(s)[0] <= width:
@@ -150,6 +160,13 @@ def draw_path(surf: pygame.Surface, g: Grid, path: list[Cell], color: Color = C.
             pygame.draw.circle(surf, color, g.center(c), max(2, g.tile // 7))
 
 
+def draw_tags(surf: pygame.Surface, fonts: Fonts, r3d: render3d.Renderer) -> None:
+    """Coloured name chips above Tom, Jerry and Bruno on the 3D board."""
+    for name, pos in r3d.labels.items():
+        rgb = tuple(int(255 * v) for v in render3d.ROLE_RGB[name])
+        chip(surf, fonts.tiny, render3d.LABEL[name], (pos[0] - 26, pos[1] - 12), rgb)
+
+
 def draw_board(surf: pygame.Surface, fonts: Fonts, state: GameState, exit_known: bool,
                g: Geometry | None = None, under: Callable[[Grid], None] | None = None) -> None:
     """Maze, features and all characters. No fog: everything on the board is drawn.
@@ -165,9 +182,7 @@ def draw_board(surf: pygame.Surface, fonts: Fonts, state: GameState, exit_known:
         surf.blit(r3d.render(state, exit_known), (C.BOARD_X, C.BOARD_Y))
         if under is not None:
             under(r3d.grid)
-        for name, pos in r3d.labels.items():
-            rgb = tuple(int(255 * v) for v in render3d.ROLE_RGB[name])
-            chip(surf, fonts.tiny, render3d.LABEL[name], (pos[0] - 26, pos[1] - 12), rgb)
+        draw_tags(surf, fonts, r3d)
         z = r3d.bruno_label_pos(state)
         if z is not None:
             text(surf, fonts.big, "z", z, C.COLOR_TEXT_DIM, center=True)
@@ -464,7 +479,7 @@ def draw_curve_box(surf: pygame.Surface, fonts: Fonts, rect: pygame.Rect, title:
     if marker is not None:
         mx = px(marker, 0)[0]
         pygame.draw.line(surf, (20, 24, 36), (mx, plot.y), (mx, plot.bottom), 2)
-        text(surf, fonts.tiny, f"{marker:.2f}".rstrip("0").rstrip("."), (rect.right - 8,
+        text(surf, fonts.tiny, f"{marker:.1f}", (rect.right - 8,
              rect.y + 6), (20, 24, 36), right=True)
 
 
@@ -534,14 +549,14 @@ def draw_menu(surf: pygame.Surface, fonts: Fonts, actions: list[str], options: l
             rect = pygame.Rect(0, 0, 320, 44)
             rect.topleft = (C.WINDOW_W // 2 - 340 + col * 370, 240 + i * 56)
             sel = idx == selected
-            pygame.draw.rect(surf, C.COLOR_ACCENT if sel else C.COLOR_PANEL, rect, border_radius=10)
+            pygame.draw.rect(surf, C.COLOR_BUTTON if sel else C.COLOR_PANEL, rect, border_radius=10)
             if col == 1:
-                text(surf, fonts.normal, "<", (rect.x + 16, rect.centery), DARK_TEXT if sel
-                     else C.COLOR_TEXT_DIM, center=True)
-                text(surf, fonts.normal, ">", (rect.right - 16, rect.centery), DARK_TEXT if sel
-                     else C.COLOR_TEXT_DIM, center=True)
-            text(surf, fonts.normal, item, rect.center, DARK_TEXT if sel else C.COLOR_TEXT,
-                 center=True)
+                text(surf, fonts.normal, "<", (rect.x + 16, rect.centery),
+                     C.COLOR_ON_BUTTON if sel else C.COLOR_TEXT_DIM, center=True)
+                text(surf, fonts.normal, ">", (rect.right - 16, rect.centery),
+                     C.COLOR_ON_BUTTON if sel else C.COLOR_TEXT_DIM, center=True)
+            text(surf, fonts.normal, item, rect.center,
+                 C.COLOR_ON_BUTTON if sel else C.COLOR_TEXT, center=True)
             rects.append(rect)
     text(surf, fonts.small, hint, (C.WINDOW_W // 2, C.WINDOW_H - 34), C.COLOR_TEXT_DIM,
          center=True)
@@ -554,7 +569,8 @@ HELP_STEPS = [
     "3. Walk onto the open exit to win. Tom wins if he catches Jerry or turn 120 passes.",
     "4. Both see only 5 steps along corridors. Tom smells the keys, not Jerry.",
     "5. Step on the kennel to wake Bruno (twice per game): he guards Jerry and bites Tom.",
-    "6. From turn 60 Tom sniffs you out every 10 turns. Stay moving, or be found.",
+    f"6. From turn {C.SCENT_START_TURN} Tom sniffs you out every {C.SCENT_PERIOD} turns. "
+    "Stay moving, or be found.",
 ]
 HELP_KEYS = [
     "WASD / arrows move, Space wait, Q set a mouse trap, E whistle Bruno back, P pause, Esc menu.",
@@ -597,11 +613,14 @@ def draw_end(surf: pygame.Surface, fonts: Fonts, winner: str, reason: str,
     text(surf, fonts.normal, reason, (box.centerx, box.top + 104), C.COLOR_TEXT_DIM, center=True)
     for i, line in enumerate(stats):
         text(surf, fonts.normal, line, (box.left + 50, box.top + 138 + i * 28))
+    widths = [fonts.small.size(b)[0] + 36 for b in buttons]
+    gap = 14
+    x = box.centerx - (sum(widths) + gap * (len(buttons) - 1)) // 2
     rects = []
-    for i, label in enumerate(buttons):
-        rect = pygame.Rect(0, 0, 170, 44)
-        rect.center = (box.left + 105 + i * 195, box.bottom - 44)
-        pygame.draw.rect(surf, C.COLOR_ACCENT, rect, border_radius=10)
-        text(surf, fonts.small, label, rect.center, DARK_TEXT, center=True)
+    for label, w in zip(buttons, widths, strict=True):
+        rect = pygame.Rect(x, box.bottom - 66, w, 44)
+        pygame.draw.rect(surf, C.COLOR_BUTTON, rect, border_radius=10)
+        text(surf, fonts.small, label, rect.center, C.COLOR_ON_BUTTON, center=True)
         rects.append(rect)
+        x += w + gap
     return rects

@@ -188,7 +188,7 @@ class Session:
             f"Keys collected: {s.keys_taken}/{C.NUM_KEYS}",
             f"Bruno activations: {b.activations if b else 0}   Bites: {s.bites}",
             "Nodes searched:  " + "   ".join(nodes),
-            matchup(self.levels),
+            matchup(self.levels, self.human),
             f"Seed {self.seed}, size {self.size}",
         ]
 
@@ -467,7 +467,7 @@ class App:
                 ui.draw_fuzzy_view(self.screen, self.fonts, pygame.Rect(0, C.TOP_BAR_H,
                                    C.BOARD_PX, C.BOARD_PX), system, d.fuzzy_inputs,
                                    system.evaluate(d.fuzzy_inputs))
-        middle = matchup(s.levels)
+        middle = matchup(s.levels, s.human)
         if s.human:
             right = f"You: {s.human.title()}"
         else:
@@ -506,9 +506,14 @@ class App:
             clock.tick(C.FPS)
 
 
-def matchup(levels: dict[str, str]) -> str:
-    """'Tom <algorithm> vs Jerry <algorithm>' for the end screen and the top bar."""
-    return f"Tom {ALGO_LABEL[TOM][levels[TOM]]} vs Jerry {ALGO_LABEL[JERRY][levels[JERRY]]}"
+def matchup(levels: dict[str, str], human: str | None) -> str:
+    """Matchup line for the top bar and end screen. AI-vs-AI shows both algorithms;
+    a human game shows only the AI's difficulty, since its plan is hidden from the player."""
+    if human is None:
+        return (f"Tom {ALGO_LABEL[TOM][levels[TOM]]} vs "
+                f"Jerry {ALGO_LABEL[JERRY][levels[JERRY]]}")
+    ai = TOM if human == JERRY else JERRY
+    return f"vs AI {ai.title()} ({levels[ai]})"
 
 
 def random_seed() -> int:

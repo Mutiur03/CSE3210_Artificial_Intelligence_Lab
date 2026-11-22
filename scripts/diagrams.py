@@ -87,7 +87,7 @@ def architecture() -> None:
     for i, t in enumerate(
         [
             "main.py  menu, loop, input",
-            "ui.py  board, panel, overlays",
+            "ui.py + render3d.py  3D board, HUD",
             "demo.py  algorithm demo (F2)",
             "record.py  frames -> mp4",
         ]

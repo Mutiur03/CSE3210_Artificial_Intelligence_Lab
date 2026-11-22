@@ -470,7 +470,7 @@ def build() -> Report:  # noqa: PLR0915
     r.heading("Objectives", 2)
     r.bullets(
         [
-            "Build a complete, playable game with Pygame only: 2D top-down, single process, shapes instead of art.",
+            "Build a complete, playable game with Pygame with a ModernGL 3D board (CC0 glTF models), light theme, single process.",
             "Use DFS, depth-limited search, bidirectional search, greedy best-first search, A*, minimax with "
             "alpha-beta pruning, MCTS and fuzzy logic where each one is genuinely the right tool.",
             "Show the reasoning: every AI move carries its mode, algorithm, node count, time and trace.",
@@ -558,8 +558,8 @@ def build() -> Report:  # noqa: PLR0915
     r.heading("System architecture", 1)
     r.para(
         "The engine (maze, game, search, fuzzy, minimax, mcts, agents) is pure Python and never imports pygame, so "
-        "tests, experiments, videos of a game and the report all run headless. Only ui.py, demo.py, main.py and "
-        "record.py touch Pygame. Agents never receive the GameState: they get an Observation that "
+        "tests, experiments, videos of a game and the report all run headless. Only ui.py, render3d.py, demo.py, main.py "
+        "and record.py touch Pygame or OpenGL. Agents never receive the GameState: they get an Observation that "
         "make_observation builds for one role, containing only what that role may know."
     )
     r.image(

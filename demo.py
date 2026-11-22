@@ -14,10 +14,11 @@ import pygame
 
 import config as C
 import minimax
+import render3d
 import ui
 from agents import TomAgent, evade_plan
 from fuzzy import FuzzyResult, FuzzySystem, JerryController, TomController
-from game import TOM, make_observation, new_game
+from game import TOM, GameState, make_observation, new_game
 from maze import Maze
 from mcts import MCTSResult, mcts, opponent_cells
 from search import (
@@ -60,6 +61,11 @@ class Demo:
         self.compare = False
         self.dls_limit = C.DLS_DEPTH
         self.mcts_age = 3
+        self.mcts_iters = C.MCTS_ITERATIONS
+        self.reveal: int | None = None  # minimax: nodes shown so far (None = whole tree)
+        self.caption = ""  # situation text for videos, shown in the top bar
+        self.scene: GameState | None = None
+        self.tom_first = False  # S is Tom and G is Jerry (Tom hunting / ambushing)
         self.controllers: dict[str, FuzzySystem] = {"TOM": TomController(),
                                                     "JERRY": JerryController()}
         self.fz_role = "TOM"
@@ -73,6 +79,7 @@ class Demo:
         """Run the selected algorithm on the current start/goal (with traces)."""
         m, s, g = self.maze, self.start, self.goal
         self.progress = 0.0
+        self.scene = None
         self.res: SearchResult | None = None
         self.res2: SearchResult | None = None
         self.order: list[Cell] = []
@@ -113,7 +120,7 @@ class Demo:
             self.mcts_targets = tom.mcts_targets(obs)
             self.mcts_cells = opponent_cells(obs, tom.last_seen)
             self.mc: MCTSResult = mcts(obs, self.mcts_targets, self.mcts_cells,
-                                       random.Random(self.seed), trace=True)
+                                       random.Random(self.seed), self.mcts_iters, trace=True)
         if self.res is not None and not self.order:
             self.order = self.res.explored_order
 
@@ -201,8 +208,10 @@ class Demo:
         pygame.draw.rect(surf, C.COLOR_PANEL, (0, 0, C.WINDOW_W, C.TOP_BAR_H))
         name = "Compare A* vs greedy" if self.compare else ALGOS[self.algo]
         ui.text(surf, self.fonts.big, f"Algorithm demo: {name}", (14, 12))
-        ui.text(surf, self.fonts.small, "1 A*  2 Greedy  3 DFS  4 DLS  5 Bidir  6 Minimax  "
-                "7 MCTS  8 Fuzzy   C compare   Esc back", (C.WINDOW_W - 14, 17),
+        hint = self.caption or ("1 A*  2 Greedy  3 DFS  4 DLS  5 Bidir  6 Minimax  "
+                                "7 MCTS  8 Fuzzy   C compare   Esc back")
+        room = C.WINDOW_W - 28 - 20 - self.fonts.big.size(f"Algorithm demo: {name}")[0]
+        ui.text(surf, self.fonts.small, ui.fit(self.fonts.small, hint, room), (C.WINDOW_W - 14, 17),
                 C.COLOR_TEXT_DIM, right=True)
         if self.compare:
             self.draw_compare(surf)
@@ -237,14 +246,30 @@ class Demo:
                 y += 20
         return y
 
-    def markers(self, surf: pygame.Surface, g: ui.Geometry, start_label: str = "S",
+    def board(self, surf: pygame.Surface) -> ui.Grid:
+        """Draw the maze (3D scene with Jerry at S and Tom at G, flat 2D if there is no GL)
+        and return the grid the overlays draw on."""
+        r3d = render3d.get_renderer()
+        if r3d is None:
+            g = ui.board_geometry(self.maze)
+            ui.draw_maze(surf, self.maze, g)
+            return g
+        if self.scene is None:
+            self.scene = new_game(self.maze, bruno_enabled=False)
+            pair = (self.start, self.goal) if self.tom_first else (self.goal, self.start)
+            self.scene.tom, self.scene.jerry = pair
+        surf.blit(r3d.render(self.scene, True), (C.BOARD_X, C.BOARD_Y))
+        ui.draw_tags(surf, self.fonts, r3d)
+        return r3d.grid
+
+    def markers(self, surf: pygame.Surface, g: ui.Grid, start_label: str = "S",
                 goal_label: str = "G") -> None:
         for cell, label, color in ((self.start, start_label, C.COLOR_ACCENT),
                                    (self.goal, goal_label, RED)):
             pygame.draw.circle(surf, color, g.center(cell), g.tile // 2 - 2, 3)
             ui.text(surf, self.fonts.small, label, g.center(cell), C.COLOR_TEXT, center=True)
 
-    def draw_progress(self, surf: pygame.Surface, g: ui.Geometry, res: SearchResult,
+    def draw_progress(self, surf: pygame.Surface, g: ui.Grid, res: SearchResult,
                       k: int) -> None:
         """Explored (blue), frontier (yellow), final path (green) after k expansions."""
         done = res.explored_order[:k]
@@ -255,8 +280,7 @@ class Demo:
             ui.draw_path(surf, g, res.path)
 
     def draw_search(self, surf: pygame.Surface) -> None:
-        g = ui.board_geometry(self.maze)
-        ui.draw_maze(surf, self.maze, g)
+        g = self.board(surf)
         k = self.shown()
         finished = k >= len(self.order)
         lines: list[tuple[str, str]] = [("#", ALGOS[self.algo])]
@@ -400,6 +424,8 @@ class Demo:
         for n in tree:
             x, _ = pos[n["id"]]
             pos[n["id"]] = (x, ys[n["ply"]])
+        shown = {n["id"] for n in tree[:self.reveal]}  # [:None] = every node
+        tree = [n for n in tree if n["id"] in shown]
         for n in tree:
             if n["parent"] is None:
                 continue
@@ -408,8 +434,8 @@ class Demo:
             color = C.COLOR_PATH if hot else ((70, 76, 90) if n["pruned"] else C.COLOR_PANEL_LINE)
             pygame.draw.line(surf, color, a, b, 4 if hot else 2)
             mx, my = (a[0] + b[0]) // 2, (a[1] + b[1]) // 2
-            ui.text(surf, self.fonts.tiny, (n["move"] or "")[:1], (mx + 6, my - 8),
-                    C.COLOR_TEXT_DIM)
+            ui.text_box(surf, self.fonts.tiny, (n["move"] or "")[:1], (mx + 10, my),
+                        C.COLOR_TEXT_DIM, center=True)
         for n in tree:
             x, y = pos[n["id"]]
             r = 18 if n["ply"] < 2 else 12
@@ -422,11 +448,12 @@ class Demo:
             pygame.draw.polygon(surf, color, pts)
             val = "pruned" if n["pruned"] else f"{n['value']:g}"
             font = self.fonts.small if n["ply"] < 2 else self.fonts.tiny
-            ui.text(surf, font, val, (x, y + r + 8), C.COLOR_TEXT_DIM if n["pruned"]
-                    else C.COLOR_TEXT, center=True)
+            ui.text_box(surf, font, val, (x, y + r + 8), C.COLOR_TEXT_DIM if n["pruned"]
+                        else C.COLOR_TEXT, center=True)
             if n["ply"] < 2 and not n["pruned"]:
-                ui.text(surf, self.fonts.tiny, f"a={_short(n['alpha'])} b={_short(n['beta'])}",
-                        (x, y + r + 24), C.COLOR_TEXT_DIM, center=True)
+                ui.text_box(surf, self.fonts.tiny,
+                            f"a={_short(n['alpha'])} b={_short(n['beta'])}",
+                            (x, y + r + 24), C.COLOR_TEXT_DIM, center=True)
         ui.text(surf, self.fonts.small, "Tom = MAX (triangle up), Jerry = MIN (triangle down). "
                 "Top 3 levels of the depth-4 alpha-beta tree; grey = pruned; green = chosen.",
                 (20, 60), C.COLOR_TEXT_DIM)
@@ -453,25 +480,18 @@ class Demo:
 
     # ---- MCTS
     def draw_mcts(self, surf: pygame.Surface) -> None:
-        g = ui.board_geometry(self.maze)
-        ui.draw_maze(surf, self.maze, g)
+        g = self.board(surf)
         mc = self.mc
         top = max(mc.samples.values(), default=1)
         for cell, n in mc.samples.items():
             pygame.draw.circle(surf, MAGENTA, g.center(cell), max(2, int(g.tile * 0.3 * n / top)))
-        for k in self.maze.keys:
-            ui.draw_key(surf, g.center(k), g.tile)
-        ui.draw_kennel(surf, g.center(self.maze.kennel), g.tile)
         letters = {}
         for i, child in enumerate(mc.children):
             letters[child.target] = chr(65 + i)
-            rect = g.rect(child.target)
+            quad = g.quad(child.target)
             color = C.COLOR_PATH if child.target == mc.target else C.COLOR_CHEESE
-            pygame.draw.rect(surf, color, rect, 3)
-            ui.text(surf, self.fonts.small, letters[child.target], (rect.x + 2, rect.y + 1),
-                    color)
-        ui.draw_jerry(surf, g.center(self.start), g.tile)
-        ui.draw_tom(surf, g.center(self.goal), g.tile, 0)
+            pygame.draw.polygon(surf, color, quad, 3)
+            ui.text(surf, self.fonts.small, letters[child.target], quad[0], color)
         lines: list[tuple[str, str]] = [
             ("#", "information-set UCT, Tom picks an ambush target"),
             ("Iterations", f"{mc.iterations}  ({mc.ms:.0f} ms)"),
@@ -524,7 +544,7 @@ class Demo:
             pygame.draw.circle(surf, C.COLOR_CHEESE if sel else C.COLOR_ACCENT,
                                (kx, track.centery), 8)
             y += 52
-        y = self.panel(surf, [("#", "result"), ("Centroid", f"{res.centroid:.2f}"),
+        y = self.panel(surf, [("#", "result"), ("Centroid", f"{res.centroid:.1f}"),
                               ("Mode", res.mode)], y + 4)
         y = ui.fuzzy_bars(surf, self.fonts, x, y + 4, PANEL.w - 36, res)
         self.panel(surf, [("#", "controls"), ("", "Up/Down pick input, Left/Right change it"),
