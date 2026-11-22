@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pygame  # noqa: E402
 
+import config as C  # noqa: E402
 import main  # noqa: E402
 from agents import JerryAgent  # noqa: E402
 from game import JERRY, make_observation  # noqa: E402
@@ -47,7 +48,7 @@ def main_() -> None:
     args = p.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     pygame.init()
-    screen = pygame.display.set_mode((1100, 720))
+    screen = pygame.display.set_mode((C.WINDOW_W, C.WINDOW_H))  # full canvas, nothing cropped
     app = main.App(screen, main.parse_args(["--seed", str(args.seed), "--tom", "hard"]))
     save(app, "menu.png")
     app.run_action("How to Play")

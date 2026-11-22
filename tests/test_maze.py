@@ -13,9 +13,7 @@ def check_rules(m) -> None:
     border = {(r, c) for r in range(n) for c in range(n) if r in (0, n - 1) or c in (0, n - 1)}
     assert not border & m.floor, "outer border must stay wall"
     assert m.dist(m.jerry_start, m.tom_start) >= C.MIN_START_DISTANCE
-    band = n // C.START_REGION_DIVISOR
-    assert m.jerry_start[0] < band and m.jerry_start[1] < band
-    assert m.tom_start[0] >= n - band and m.tom_start[1] >= n - band
+    assert m.jerry_start in m.floor and m.tom_start in m.floor
     assert len(m.keys) == C.NUM_KEYS
     for i, a in enumerate(m.keys):
         assert a not in (m.jerry_start, m.tom_start)

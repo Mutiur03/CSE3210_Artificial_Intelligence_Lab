@@ -127,13 +127,12 @@ def add_loops(floor: set[Cell], size: int, rng: random.Random) -> int:
 def _place(cells: list[Cell], adj: dict[Cell, tuple[Cell, ...]], size: int,
            rng: random.Random) -> dict | None:
     """Try to place starts, keys, exit, kennel. Returns a dict or None on failure."""
-    band = size // C.START_REGION_DIVISOR
-    jerry_zone = [p for p in cells if p[0] < band and p[1] < band]
-    tom_zone = [p for p in cells if p[0] >= size - band and p[1] >= size - band]
-    jerry, tom = rng.choice(jerry_zone), rng.choice(tom_zone)
+    jerry = rng.choice(cells)
     jerry_map = bfs_distance_map(adj, jerry)
-    if jerry_map.get(tom, INF) < C.MIN_START_DISTANCE:
+    far = [p for p in cells if jerry_map.get(p, INF) >= C.MIN_START_DISTANCE]
+    if not far:
         return None
+    tom = rng.choice(far)
     pool = [p for p in cells if p not in (jerry, tom)]
     rng.shuffle(pool)
     keys: list[Cell] = []

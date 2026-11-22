@@ -224,11 +224,11 @@ class Demo:
         x = PANEL.x + 18
         for label, value in lines:
             if label == "#":  # section heading
-                ui.text(surf, self.fonts.tiny, value.upper(), (x, y + 4), C.COLOR_TEXT_DIM)
+                ui.text(surf, self.fonts.small, value, (x, y + 2), C.COLOR_ACCENT)
                 y += 22
             elif label:
                 ui.text(surf, self.fonts.small, label, (x, y), C.COLOR_TEXT_DIM)
-                ui.text(surf, self.fonts.normal, ui.fit(self.fonts.normal, value, 230),
+                ui.text(surf, self.fonts.normal, ui.fit(self.fonts.normal, value, PANEL.w - 196),
                         (x + 160, y - 2))
                 y += 24
             else:
@@ -339,7 +339,9 @@ class Demo:
         k = int(self.progress)
         rows = []
         for i, (res, label) in enumerate(((self.res, "A*"), (self.res2, "Greedy best-first"))):
-            area = pygame.Rect(8 + i * 546, C.TOP_BAR_H + 28, 538, 538)
+            side = 538
+            area = pygame.Rect((C.WINDOW_W - 2 * side - 16) // 2 + i * (side + 16),
+                               C.TOP_BAR_H + 28, side, side)
             g = ui.board_geometry(self.maze, area)
             ui.text(surf, self.fonts.normal, label, (area.x, C.TOP_BAR_H + 6))
             ui.draw_maze(surf, self.maze, g)

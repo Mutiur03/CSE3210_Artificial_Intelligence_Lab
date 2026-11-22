@@ -19,6 +19,7 @@ from pathlib import Path
 if "--screenshot" in sys.argv:  # headless capture must pick drivers before pygame starts
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+os.environ.setdefault("SDL_RENDER_SCALE_QUALITY", "linear")  # smooth upscale to the window / screen
 
 import pygame  # noqa: E402
 
@@ -184,6 +185,7 @@ class App:
 
     def __init__(self, screen: pygame.Surface, args: argparse.Namespace) -> None:
         self.screen = screen
+        self.fullscreen = False
         self.fonts = ui.Fonts()
         self.size, self.seed, self.bruno = args.size, args.seed, not args.no_bruno
         self.levels = {TOM: args.tom.upper(), JERRY: args.jerry.upper()}
@@ -357,9 +359,23 @@ class App:
             self.scene = "menu"
 
     # ---------------------------------------------------------- loop
+    def toggle_fullscreen(self) -> None:
+        """Switch between the 1280x800 window and the full screen. The canvas is always
+        1280x800; SDL scales it and keeps the aspect ratio (black bars when needed)."""
+        want = not self.fullscreen
+        flags = pygame.SCALED | (pygame.FULLSCREEN if want else pygame.RESIZABLE)
+        try:
+            self.screen = pygame.display.set_mode((C.WINDOW_W, C.WINDOW_H), flags)
+            self.fullscreen = want
+        except pygame.error:  # display driver refuses the mode: stay in the window
+            self.notice = "Full screen is not available on this display"
+
     def handle(self, ev: pygame.event.Event) -> None:
         if ev.type == pygame.QUIT:
             self.running = False
+        elif ev.type == pygame.KEYDOWN and (ev.key == pygame.K_F11 or (
+                ev.key == pygame.K_RETURN and ev.mod & pygame.KMOD_ALT)):
+            self.toggle_fullscreen()
         elif self.help:
             if ev.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
                 self.help = False
@@ -394,7 +410,7 @@ class App:
             self.demo.draw(self.screen)
         elif self.scene == "menu" or self.session is None:
             hint = ("Arrows / mouse select, Enter choose, Left / Right change, "
-                    "R random seed, F2 demo")
+                    "R random seed, F2 demo, F11 full screen")
             if self.seed_buf is not None:
                 hint = "Type seed digits, Enter to confirm, Esc to cancel"
             self.rects = ui.draw_menu(self.screen, self.fonts, self.ACTIONS, self.options(),
@@ -447,7 +463,7 @@ class App:
                       "T trace. AI plans stay hidden in human games; watch AI vs AI"]
         else:
             footer = ["P pause, N step, +/- speed, Tab/A path, E explored, F fuzzy",
-                      f"T trace, F2 demo, Esc menu   [{flags or 'no overlays'}]"]
+                      f"T trace, F2 demo, F11 full screen, Esc menu   [{flags or 'no overlays'}]"]
         ui.draw_panel(self.screen, self.fonts, ais, s.bruno_lines(), s.log, footer,
                       legend=s.human is not None)
         self.rects = []
@@ -496,7 +512,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     pygame.init()
-    screen = pygame.display.set_mode((C.WINDOW_W, C.WINDOW_H))
+    screen = pygame.display.set_mode((C.WINDOW_W, C.WINDOW_H), pygame.SCALED | pygame.RESIZABLE)
     pygame.display.set_caption(C.TITLE)
     app = App(screen, args)
     if args.screenshot:

@@ -12,7 +12,6 @@ NUM_KEYS = 3
 MIN_START_DISTANCE = 16  # path distance Jerry start <-> Tom start
 MIN_KEY_SEPARATION = 6  # pairwise path distance between keys
 MAX_KEY_TOUR = 70  # fairness: best start -> 3 keys -> exit walk, leaves 50 turns to spare
-START_REGION_DIVISOR = 3  # start regions = outer size//3 band of each corner
 MAX_MAZE_ATTEMPTS = 1000  # derived seeds tried before giving up
 PLACEMENT_TRIES = 20  # feature placements tried on one carved maze
 
@@ -66,16 +65,17 @@ W_STUN = -8
 W_DEAD_END = 5
 
 # ---------------------------------------------------------------- window / UI (5)
-WINDOW_W = 1100
-WINDOW_H = 720
+WINDOW_W = 1280  # logical canvas; SDL scales it to the window or the full screen (F11)
+WINDOW_H = 800
 FPS = 60
 TITLE = "Cheese Heist"
 TOP_BAR_H = 48
 BOARD_X = 0
 BOARD_Y = TOP_BAR_H
-BOARD_PX = 672  # square board area; tile = BOARD_PX // size
-PANEL_X = 672
-PANEL_W = WINDOW_W - PANEL_X  # 428
+BOARD_PX = 736  # square board area; tile = BOARD_PX // size (35 px at 21x21)
+PANEL_X = BOARD_PX
+PANEL_W = WINDOW_W - PANEL_X  # 544
+FONT_NAMES = ("bahnschrift", "segoeui", "arial")  # first installed family wins; else pygame default
 EVENT_LOG_LINES = 6
 FOG_ALPHA = 165  # 65% black
 

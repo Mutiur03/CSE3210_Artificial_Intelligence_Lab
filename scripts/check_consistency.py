@@ -22,7 +22,10 @@ from pptx import Presentation
 from pptx.util import Pt
 
 ROOT = Path(__file__).resolve().parent.parent
-PPTX = ROOT / "slides" / "cheese_heist.pptx"
+sys.path.insert(0, str(ROOT))
+import config as C  # noqa: E402
+
+PPTX =ROOT / "slides" / "cheese_heist.pptx"
 DOCX = ROOT / "report" / "cheese_heist_report.docx"
 VIDEOS = [
     "a_bruno_saves_jerry",
@@ -169,11 +172,10 @@ def scenario_tokens() -> dict[str, list[str]]:
 # ------------------------------------------------------------------ checks
 
 
-def check_experiments(exp: dict, slides: list[dict], doc: dict) -> None:
+def check_experiments(exp: dict, doc: dict) -> None:
     results_md = ROOT / "docs" / "RESULTS.md"
     md_rows = [r for t in md_tables(results_md) for r in t]
     doc_rows = [r for t in doc["tables"] for r in t]
-    slide_rows = [r for s in slides for t in s["tables"] for r in t]
     for key, data in exp.items():
         for name, s in data["rows"]:
             want = fmt_row(name, s)
@@ -182,17 +184,6 @@ def check_experiments(exp: dict, slides: list[dict], doc: dict) -> None:
                 f"docs/RESULTS.md {key} row differs from results/experiments.json: {name}",
             )
             check(want in doc_rows, f"report {key} row differs / missing: {name}")
-    # slides: E1 table shows (name shortened, Jerry %, turns, Tom nodes, Tom ms)
-    for name, s in exp["E1"]["rows"]:
-        short = name.replace("Tom ", "").replace("Jerry ", "J ")
-        want = [
-            short,
-            f"{round(100 * s['jerry_win'])}",
-            f"{s['avg_turns']:.1f}",
-            f"{s['TOM']['avg_nodes']:.1f}",
-            f"{s['TOM']['avg_ms']:.2f}",
-        ]
-        check(want in slide_rows, f"slides E1 table row differs / missing: {name}")
     # the conclusion sentences of docs/RESULTS.md appear in the report
     text = (results_md).read_text(encoding="utf-8")
     for m in re.finditer(r"\*\*Conclusion\.\*\* (.*)", text):
@@ -227,7 +218,7 @@ def check_scenario(slides_text: str, doc: dict) -> None:
                 check(tuple(plain) in doc_rows, f"report lacks table row of {md.name}: {plain[:3]}")
 
 
-def check_seeds(slides_text: str, doc: dict) -> None:
+def check_seeds(doc: dict) -> None:
     seeds = json.loads((ROOT / "results" / "demo_seeds.json").read_text(encoding="utf-8"))
     demo = (ROOT / "docs" / "DEMO.md").read_text(encoding="utf-8")
     for key, v in seeds.items():
@@ -235,7 +226,7 @@ def check_seeds(slides_text: str, doc: dict) -> None:
             continue
         targets = [("docs/DEMO.md", demo)]
         if v.get("video", True):
-            targets += [("slides", slides_text), ("report", doc["text"])]
+            targets += [("report", doc["text"])]  # the slides are about algorithms, not videos
         for where, text in targets:
             check(str(v["seed"]) in text, f"{where} lacks demo seed {v['seed']} ({key})")
             check(
@@ -265,9 +256,6 @@ def check_images(slides: list[dict], doc: dict) -> None:
         check(p in in_doc, f"report lacks scenario image {p.relative_to(ROOT)}")
     for p in sorted((ROOT / "results").glob("E*.png")):
         check(p in in_doc, f"report lacks chart {p.relative_to(ROOT)}")
-    in_slides = {known[h] for s in slides for h in s["pics"] if h in known}
-    for p in sorted((ROOT / "results").glob("E*.png")):
-        check(p in in_slides, f"slides lack chart {p.relative_to(ROOT)}")
 
 
 def check_empty(slides: list[dict], doc: dict) -> None:
@@ -306,7 +294,8 @@ def check_videos() -> None:
             size = r.get_meta_data()["size"]
             r.close()
             check(
-                n >= 10 and tuple(size) == (1100, 720), f"video {p.name}: {n} frames, size {size}"
+                n >= 10 and tuple(size) == (C.WINDOW_W, C.WINDOW_H),
+                f"video {p.name}: {n} frames, size {size}",
             )
             print(
                 f"  video {p.name}: {p.stat().st_size // 1024} KB, {n} frames, {size[0]}x{size[1]}"
@@ -341,9 +330,9 @@ def main() -> None:
             sys.exit(f"missing {f}: run make slides / make report first")
     slides, slides_text = pptx_content()
     doc = docx_content()
-    check_experiments(exp, slides, doc)
+    check_experiments(exp, doc)
     check_scenario(slides_text, doc)
-    check_seeds(slides_text, doc)
+    check_seeds(doc)
     check_images(slides, doc)
     check_empty(slides, doc)
     check_videos()

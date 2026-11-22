@@ -30,15 +30,20 @@ MODE_COLORS = {
 ROLE_COLORS = {TOM: C.COLOR_TOM, JERRY: C.COLOR_JERRY}
 
 
+def ui_font(size: int, bold: bool = False) -> pygame.font.Font:
+    """Installed system face from C.FONT_NAMES (no font files shipped); pygame default if none."""
+    return pygame.font.SysFont(",".join(C.FONT_NAMES), size, bold=bold)
+
+
 @dataclass
 class Fonts:
-    """Default pygame font in a few sizes (no font files needed)."""
+    """UI type scale, sized for the 1280x800 canvas. Headings are bold, body is regular."""
 
-    tiny: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 18))
-    small: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 21))
-    normal: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 25))
-    big: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 34))
-    title: pygame.font.Font = field(default_factory=lambda: pygame.font.Font(None, 72))
+    tiny: pygame.font.Font = field(default_factory=lambda: ui_font(15))
+    small: pygame.font.Font = field(default_factory=lambda: ui_font(18))
+    normal: pygame.font.Font = field(default_factory=lambda: ui_font(21))
+    big: pygame.font.Font = field(default_factory=lambda: ui_font(28, bold=True))
+    title: pygame.font.Font = field(default_factory=lambda: ui_font(64, bold=True))
 
 
 def text(surf: pygame.Surface, font: pygame.font.Font, s: str, pos: tuple[int, int],
@@ -279,21 +284,22 @@ def draw_bruno(surf: pygame.Surface, fonts: Fonts, ctr: tuple[int, int], t: int,
 def draw_top_bar(surf: pygame.Surface, fonts: Fonts, state: GameState, middle: str,
                  right: str) -> None:
     """Turn counter with progress bar, key icons, matchup / difficulty, role or speed."""
-    pygame.draw.rect(surf, C.COLOR_PANEL, (0, 0, C.WINDOW_W, C.TOP_BAR_H))
-    pygame.draw.line(surf, C.COLOR_PANEL_LINE, (0, C.TOP_BAR_H - 1), (C.WINDOW_W, C.TOP_BAR_H - 1))
+    w = surf.get_width()
+    pygame.draw.rect(surf, C.COLOR_PANEL, (0, 0, w, C.TOP_BAR_H))
+    pygame.draw.line(surf, C.COLOR_PANEL_LINE, (0, C.TOP_BAR_H - 1), (w, C.TOP_BAR_H - 1))
     turn = min(state.turn, C.TURN_LIMIT)
-    text(surf, fonts.normal, f"Turn {turn}/{C.TURN_LIMIT}", (14, 15))
-    bar = pygame.Rect(130, 18, 170, 12)
-    pygame.draw.rect(surf, C.COLOR_PANEL_LINE, bar, border_radius=6)
+    label = text(surf, fonts.normal, f"Turn {turn}/{C.TURN_LIMIT}", (18, 12))
+    bar = pygame.Rect(label.right + 14, 19, 150, 10)
+    pygame.draw.rect(surf, C.COLOR_PANEL_LINE, bar, border_radius=5)
     fill = bar.copy()
     fill.w = int(bar.w * turn / C.TURN_LIMIT)
-    pygame.draw.rect(surf, C.COLOR_ACCENT, fill, border_radius=6)
-    text(surf, fonts.normal, "Keys", (322, 15))
+    pygame.draw.rect(surf, C.COLOR_ACCENT, fill, border_radius=5)
+    keys = text(surf, fonts.normal, "Keys", (bar.right + 30, 12), C.COLOR_TEXT_DIM)
     for i in range(C.NUM_KEYS):
         width = 0 if i < state.keys_taken else 2
-        pygame.draw.circle(surf, C.COLOR_CHEESE, (382 + i * 24, 24), 9, width)
-    text(surf, fonts.normal, middle, (460, 15), C.COLOR_TEXT_DIM)
-    text(surf, fonts.normal, right, (C.WINDOW_W - 16, 15), C.COLOR_TEXT, right=True)
+        pygame.draw.circle(surf, C.COLOR_CHEESE, (keys.right + 18 + i * 24, 24), 9, width)
+    text(surf, fonts.normal, middle, (keys.right + 110, 12), C.COLOR_TEXT_DIM)
+    text(surf, fonts.normal, right, (w - 18, 12), C.COLOR_TEXT, right=True)
 
 
 @dataclass
@@ -360,11 +366,11 @@ def draw_ai_block(surf: pygame.Surface, fonts: Fonts, v: AIView, x: int, y: int,
 def section(surf: pygame.Surface, fonts: Fonts, title: str, lines: list[str], x: int,
             y: int, w: int) -> int:
     pygame.draw.line(surf, C.COLOR_PANEL_LINE, (x, y), (x + w, y))
-    text(surf, fonts.tiny, title.upper(), (x, y + 6), C.COLOR_TEXT_DIM)
-    y += 24
+    text(surf, fonts.small, title, (x, y + 8), C.COLOR_ACCENT)
+    y += 34
     for line in lines:
         text(surf, fonts.small, fit(fonts.small, line, w), (x, y))
-        y += 19
+        y += 22
     return y + 6
 
 
@@ -499,8 +505,8 @@ def draw_menu(surf: pygame.Surface, fonts: Fonts, actions: list[str], options: l
     draw_key(surf, (C.WINDOW_W // 2, 160), 64)
     draw_tom(surf, (C.WINDOW_W // 2 + 70, 160), 64, 0)
     rects = []
-    text(surf, fonts.small, "PLAY", (C.WINDOW_W // 2 - 340, 214), C.COLOR_TEXT_DIM)
-    text(surf, fonts.small, "OPTIONS  (Left / Right to change)", (C.WINDOW_W // 2 + 30, 214),
+    text(surf, fonts.small, "Play", (C.WINDOW_W // 2 - 340, 214), C.COLOR_TEXT_DIM)
+    text(surf, fonts.small, "Options (Left / Right to change)", (C.WINDOW_W // 2 + 30, 214),
          C.COLOR_TEXT_DIM)
     for col, items in enumerate((actions, options)):
         for i, item in enumerate(items):
