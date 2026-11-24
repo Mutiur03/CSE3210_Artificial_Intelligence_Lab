@@ -25,7 +25,7 @@ from game import SLEEP, GameState
 from search import Cell
 
 MODELS = Path(__file__).parent / "assets" / "models"
-TWEEN_S = 0.12  # walk animation time; record.py sets 0 so each video frame shows the final cell
+TWEEN_S = 0.12  # walk animation time
 MSAA = 4
 SKY = (0.93, 0.95, 0.98)
 SUN = np.array([-0.45, 0.8, 0.4], dtype="f4")

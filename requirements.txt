@@ -1,13 +1,6 @@
 pygame>=2.5
 numpy
-matplotlib
 pillow
-imageio
-imageio-ffmpeg
-python-pptx
-python-docx
-pytest
-ruff
 moderngl
 trimesh
 scipy

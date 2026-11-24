@@ -141,9 +141,9 @@ def mcts(obs: Observation, targets: list[Cell], opp_cells: list[Cell], rng: rand
          trace: bool = False) -> MCTSResult:
     """Information-set UCT over strategic `targets` for `obs.role`.
 
-    Where used: NIGHTMARE Tom (ambush target) and NIGHTMARE Jerry (next key),
-    re-planned every 5 turns or when the opponent is newly seen; the MCTS view
-    of the algorithm demo. `time_limit_ms` is only a safety net: normally all
+    Where used: every MCTS agent (Tom: ambush / chase target, Jerry: next key), when
+    a re-plan is due (agents.AIAgent.mcts_move); the MCTS view of the algorithm demo.
+    `time_limit_ms` is only a safety net: normally all
     `iterations` run, so results are reproducible.
     """
     t0 = time.perf_counter()
@@ -157,7 +157,7 @@ def mcts(obs: Observation, targets: list[Cell], opp_cells: list[Cell], rng: rand
     for _ in range(iterations):
         if time_limit_ms and (time.perf_counter() - t0) * 1000 > time_limit_ms:
             break
-        opp = rng.choice(opp_cells)  # determinization
+        opp = rng.choice(opp_cells)
         samples[opp] += 1
         s = base.copy(history=False)
         if obs.role == TOM:
@@ -166,7 +166,7 @@ def mcts(obs: Observation, targets: list[Cell], opp_cells: list[Cell], rng: rand
             s.tom = opp
         if untried:  # expansion: one new child per iteration
             child = kids[untried.pop(rng.randrange(len(untried)))]
-        else:  # selection: UCB1
+        else:
             child = max(kids, key=lambda k: k.ucb(root_visits, c))
         reward = playout(s, obs.role, child.target, rng)
         child.visits += 1

@@ -134,7 +134,6 @@ class FuzzySystem:
         return res
 
 
-# ------------------------------------------------------------------ Tom (4.4)
 
 TOM_INPUTS = [
     FuzzyVar("dist", 0, 30, {"Near": trap(0, 0, 3, 6), "Mid": tri(4, 8, 13),
@@ -156,7 +155,6 @@ TOM_RULES: list[Rule] = [
     ("T7", [("bruno", "High")], "RETREAT"),
 ]
 
-# ------------------------------------------------------------------ Jerry (4.4)
 
 JERRY_INPUTS = [
     FuzzyVar("danger", 0, 30, {"Close": trap(0, 0, 3, 6), "Medium": tri(4, 8, 12),
@@ -169,7 +167,8 @@ JERRY_OUTPUT = FuzzyVar("urgency", 0, 100, {
     "DASH": trap(70, 85, 100, 100)})
 JERRY_RULES: list[Rule] = [
     ("J1", [("danger", "Safe"), ("keys_left", "Some")], "SNEAK"),
-    ("J2", [("danger", "Medium"), ("keys_left", "Some")], "EVADE"),
+    ("J2", [("danger", "Medium"), ("keys_left", "Some"), ("bruno_ready", "No")], "EVADE"),
+    ("J8", [("danger", "Medium"), ("keys_left", "Some"), ("bruno_ready", "Yes")], "BRUNO"),
     ("J3", [("danger", "Close"), ("bruno_ready", "Yes")], "BRUNO"),
     ("J4", [("danger", "Close"), ("bruno_ready", "No")], "EVADE"),
     ("J5", [("keys_left", "Done"), ("danger", "Safe")], "DASH"),

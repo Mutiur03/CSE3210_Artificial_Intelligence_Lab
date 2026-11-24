@@ -17,7 +17,8 @@ PLACEMENT_TRIES = 20  # feature placements tried on one carved maze
 
 # ---------------------------------------------------------------- rules (3.2-3.7)
 TURN_LIMIT = 120
-VISION_RADIUS = 5  # BFS path distance
+VISION_RADIUS = 5  # BFS path distance (the fog; AIs ignore it while AI_FULL_INFO)
+AI_FULL_INFO = True  # AI observations show both characters and Bruno everywhere (user decision)
 ACTIONS = ("UP", "DOWN", "LEFT", "RIGHT", "WAIT")
 DELTAS = {"UP": (-1, 0), "DOWN": (1, 0), "LEFT": (0, -1), "RIGHT": (0, 1), "WAIT": (0, 0)}
 EVENT_MEMORY_ROUNDS = 1  # observation events: this round and the previous one
@@ -41,30 +42,34 @@ TRAP_STUN = 2  # Tom's stun when he springs a trap
 WHISTLE_COOLDOWN = 8  # turns between two whistles
 
 # ---------------------------------------------------------------- AI (4.x, used from phase 2)
-HARD_MS_BUDGET = 100
-NIGHTMARE_MS_BUDGET = 300
+MINIMAX_MS_BUDGET = 100  # time safety net per move; node/iteration caps decide normally
+MCTS_MS_BUDGET = 300
+BRUNO_FEAR_RANGE = 8  # Tom fuzzy input bruno = max(0, 1 - d(Bruno, Tom) / 8)
+# fuzzy mode -> factors on the minimax evaluation terms (dist, goal, escape, bruno)
+MODE_SCALE = {
+    "HUNT": (1.5, 1.0, 1.0, 1.0), "AMBUSH": (0.5, 3.0, 1.0, 1.0),
+    "RETREAT": (0.5, 1.0, 1.0, 3.0), "SWEEP": (1.0, 1.0, 1.0, 1.0),
+    "SNEAK": (0.5, 3.0, 1.0, 1.0), "EVADE": (2.0, 1.0, 2.0, 1.0),
+    "RUN_FOR_BRUNO": (1.0, 3.0, 1.0, 1.0), "DASH": (0.5, 4.0, 1.0, 1.0),
+}
+CORNER_CHECK_DIST = 10  # Jerry checks she is not cornered while Tom is this close
+MIN_ROOM = 10  # cells she must still reach before Tom after a move, else it is a trap
+INTERCEPT_MIN_DIST = 4  # closer than this Tom chases directly instead of intercepting
+W_AIM = -10  # Tom: per step from the interception cell (see agents.AIAgent.intercept)
+LOOP_WINDOW = 16  # turns of (own cell, opponent cell) history kept for loop detection
+STILL_TURNS = 5  # Jerry standing still this many turns in a row = hiding: commit to a route
+LOOP_COMMIT_TURNS = 8  # turns a loop breaker commits once a loop is seen
 MINIMAX_DEPTH = 4
 MINIMAX_NODE_CAP = 20000
 MCTS_ITERATIONS = 300
 MCTS_UCB_C = 1.4
 MCTS_PLAYOUT_TURNS = 20
 MCTS_REPLAN_TURNS = 5
-DLS_DEPTH = 5
-AMBUSH_MAX_WAIT = 6  # Tom waits at most this many turns in ambush before sweeping instead
-NORMAL_FLEE_RANGE = 2  # NORMAL EVADE: one-step flee only when Tom is this close, else A* to goal
-CLOSE_RANGE = 4
-# agent mode details (4.5)
-SWEEP_STALE_TURNS = 20  # Tom SWEEP: a cell not seen for this many turns counts as unseen
-JERRY_MEMORY_TURNS = 6  # Jerry uses Tom's last seen cell for at most this many turns
-RISK_RADIUS = 6  # risk(cell) = max(0, RISK_RADIUS - d_tom(cell)) / RISK_RADIUS
-RISK_WEIGHT = 4  # Jerry A* entry cost = 1 + RISK_WEIGHT * risk (+ dead-end cost)
-DEAD_END_COST = 3
-DEAD_END_ALERT_DIST = 8  # dead-end cost applies while Tom is within this distance
-EVADE_FLOOD_WEIGHT = 0.5
-EVADE_DEAD_END_PENALTY = 5
-BRUNO_FEAR_RANGE = 8  # Tom fuzzy input bruno = max(0, 1 - d(Bruno, Tom) / 8)
 # minimax evaluation weights (4.6), Tom perspective
-W_DIST = -10
+W_DIST = -10  # per step of d(Tom, Jerry) up to NEAR_DIST
+W_DIST_FAR = -1  # per step beyond NEAR_DIST
+NEAR_DIST = 8
+W_KEYS = -100  # per key Jerry holds
 W_GOAL = 2
 W_ESCAPE = -3
 W_BRUNO_NEAR = -15

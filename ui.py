@@ -1,8 +1,8 @@
-"""Pygame drawing: board, characters, fog, overlays, top bar, right panel, fuzzy
-view, menu, help and end screens.
+"""Pygame drawing: board, characters, fog, overlays, top bar, right panel, menu,
+help and end screens.
 
-Pure drawing. No game rules here; everything shown comes from GameState,
-Decision and FuzzyResult objects passed in by main.py / demo.py.
+Pure drawing. No game rules here; everything shown comes from GameState and
+Decision objects passed in by main.py / demo.py.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import pygame
 
 import config as C
 import render3d
-from fuzzy import FuzzyResult, FuzzySystem
 from game import JERRY, SLEEP, TOM, GameState
 from maze import Maze
 from search import Cell
@@ -25,8 +24,7 @@ DARK_TEXT = (15, 18, 25)
 MODE_COLORS = {
     "HUNT": (0xE7, 0x4C, 0x3C), "AMBUSH": (0xE6, 0x7E, 0x22), "SWEEP": (0xF1, 0xC4, 0x0F),
     "RETREAT": (0x95, 0xA5, 0xA6), "SNEAK": (0x5D, 0xAD, 0xE2), "EVADE": (0xAF, 0x7A, 0xC5),
-    "RUN_FOR_BRUNO": (0xA1, 0x88, 0x7F), "BRUNO": (0xA1, 0x88, 0x7F),
-    "DASH": (0x2E, 0xCC, 0x71), "SCRIPTED": (0x7F, 0x8C, 0x8D),
+    "RUN_FOR_BRUNO": (0xA1, 0x88, 0x7F), "DASH": (0x2E, 0xCC, 0x71),
 }
 ROLE_COLORS = {TOM: C.COLOR_TOM, JERRY: C.COLOR_JERRY}
 
@@ -89,7 +87,6 @@ def chip(surf: pygame.Surface, font: pygame.font.Font, label: str, pos: tuple[in
     return rect
 
 
-# ------------------------------------------------------------------ board
 
 
 @dataclass(frozen=True)
@@ -313,7 +310,6 @@ def draw_bruno(surf: pygame.Surface, fonts: Fonts, ctr: tuple[int, int], t: int,
                                max(1, t // 14))
 
 
-# ------------------------------------------------------------------ top bar and panel
 
 
 def draw_top_bar(surf: pygame.Surface, fonts: Fonts, state: GameState, middle: str,
@@ -342,56 +338,27 @@ class AIView:
     """What the panel shows about one AI agent."""
 
     role: str
-    difficulty: str
+    algo: str
     mode: str
     algorithm: str
     nodes: int
     ms: float
-    fuzzy: FuzzyResult | None
     belief: str
-
-
-def fuzzy_bars(surf: pygame.Surface, fonts: Fonts, x: int, y: int, w: int,
-               res: FuzzyResult, row_h: int = 18) -> int:
-    """One bar per output set (membership at the centroid); the chosen set is bright."""
-    names = list(res.output_memberships)
-    label_w = 64
-    for name in names:
-        mu = res.output_memberships[name]
-        color = MODE_COLORS.get(name, C.COLOR_ACCENT)
-        text(surf, fonts.tiny, name if len(name) <= 7 else name[:7], (x, y + 2), C.COLOR_TEXT_DIM)
-        bar = pygame.Rect(x + label_w, y + 3, w - label_w - 44, row_h - 7)
-        pygame.draw.rect(surf, C.COLOR_PANEL_LINE, bar, border_radius=4)
-        fill = bar.copy()
-        fill.w = max(0, int(bar.w * mu))
-        if fill.w:
-            pygame.draw.rect(surf, color, fill, border_radius=4)
-        text(surf, fonts.tiny, f"{mu:.2f}", (x + w, y + 2), C.COLOR_TEXT, right=True)
-        y += row_h
-    return y
 
 
 def draw_ai_block(surf: pygame.Surface, fonts: Fonts, v: AIView, x: int, y: int, w: int,
                   compact: bool) -> int:
-    """Header, mode chip, algorithm/nodes/ms, fuzzy bars, belief. Returns the next y."""
+    """Header, mode chip, algorithm/nodes/ms, belief. Returns the next y."""
     font = fonts.normal if compact else fonts.big
-    text(surf, font, f"AI {v.role.title()}  ({v.difficulty})", (x, y), ROLE_COLORS[v.role])
+    text(surf, font, f"AI {v.role.title()}  ({v.algo})", (x, y), ROLE_COLORS[v.role])
     y += 26 if compact else 34
-    rect = chip(surf, fonts.small, v.mode, (x, y), MODE_COLORS.get(v.mode, C.COLOR_ACCENT))
+    color = MODE_COLORS.get(v.mode, C.COLOR_ACCENT)
+    rect = chip(surf, fonts.small, v.mode, (x, y), color)
     text(surf, fonts.small, f"{v.nodes} nodes   {v.ms:.1f} ms", (rect.right + 12, y + 5),
          C.COLOR_TEXT_DIM)
     y += rect.h + 6
     text(surf, fonts.small, fit(fonts.small, v.algorithm, w), (x, y))
     y += 20
-    if v.fuzzy is not None:
-        y = fuzzy_bars(surf, fonts, x, y + 2, w, v.fuzzy, 16 if compact else 18)
-        text(surf, fonts.tiny, f"centroid {v.fuzzy.centroid:.1f}", (x, y), C.COLOR_TEXT_DIM)
-        y += 16
-    else:
-        note = ("EASY: no fuzzy logic (greedy)" if v.difficulty == "EASY"
-                else "fuzzy mode from the first move")
-        text(surf, fonts.tiny, note, (x, y + 2), C.COLOR_TEXT_DIM)
-        y += 18
     for part in v.belief.split(";"):  # "memory; Bruno state": one row each, never clipped
         text(surf, fonts.small, fit(fonts.small, part.strip(), w), (x, y))
         y += 20
@@ -449,85 +416,6 @@ def draw_legend(surf: pygame.Surface, fonts: Fonts, x: int, y: int) -> None:
         text(surf, fonts.small, name, (cx + 22, cy - 7))
 
 
-# ------------------------------------------------------------------ fuzzy view
-
-
-def draw_curve_box(surf: pygame.Surface, fonts: Fonts, rect: pygame.Rect, title: str,
-                   lo: float, hi: float, curves: list[tuple[str, Callable[[float], float], Color]],
-                   marker: float | None, fill: list[tuple[int, float]] | None = None) -> None:
-    """Membership curves of one variable on [lo, hi]; `marker` = crisp value line;
-    `fill` = aggregated output shape (x, mu) drawn underneath."""
-    pygame.draw.rect(surf, (238, 241, 247), rect, border_radius=6)
-    text(surf, fonts.small, title, (rect.x + 8, rect.y + 4))
-    plot = pygame.Rect(rect.x + 8, rect.y + 24, rect.w - 16, rect.h - 44)
-
-    def px(x: float, mu: float) -> tuple[int, int]:
-        return (int(plot.x + (x - lo) / (hi - lo) * plot.w), int(plot.bottom - mu * plot.h))
-
-    pygame.draw.line(surf, C.COLOR_PANEL_LINE, plot.bottomleft, plot.bottomright)
-    if fill:
-        pts = [px(lo, 0)] + [px(x, mu) for x, mu in fill] + [px(hi, 0)]
-        pygame.draw.polygon(surf, (190, 205, 228), pts)
-    lx = rect.x + 8
-    for name, mf, color in curves:
-        n = 120
-        pygame.draw.lines(surf, color, False,
-                          [px(lo + (hi - lo) * i / n, mf(lo + (hi - lo) * i / n))
-                           for i in range(n + 1)], 2)
-        lab = text(surf, fonts.tiny, name, (lx, plot.bottom + 4), color)
-        lx = lab.right + 10
-    if marker is not None:
-        mx = px(marker, 0)[0]
-        pygame.draw.line(surf, (20, 24, 36), (mx, plot.y), (mx, plot.bottom), 2)
-        text(surf, fonts.tiny, f"{marker:.1f}", (rect.right - 8,
-             rect.y + 6), (20, 24, 36), right=True)
-
-
-PALETTE = [(0x5D, 0xAD, 0xE2), (0xF5, 0xB0, 0x41), (0xE7, 0x4C, 0x3C), (0x58, 0xD6, 0x8D)]
-
-
-def draw_fuzzy_view(surf: pygame.Surface, fonts: Fonts, rect: pygame.Rect, system: FuzzySystem,
-                    inputs: dict[str, float], res: FuzzyResult,
-                    selected: str | None = None) -> None:
-    """Membership curves of every input (crisp value marked), rule strengths, the
-    aggregated output with the centroid line, and the chosen mode."""
-    pygame.draw.rect(surf, C.COLOR_PANEL, rect)
-    pygame.draw.rect(surf, C.COLOR_PANEL_LINE, rect, 1)
-    text(surf, fonts.big, f"Fuzzy controller: {system.role.title()}", (rect.x + 14, rect.y + 10))
-    names = list(system.inputs)
-    col_w = (rect.w - 14 * (len(names) + 1)) // len(names)
-    for i, name in enumerate(names):
-        var = system.inputs[name]
-        box = pygame.Rect(rect.x + 14 + i * (col_w + 14), rect.y + 48, col_w, 150)
-        curves = [(s, mf, PALETTE[j % len(PALETTE)]) for j, (s, mf) in enumerate(var.sets.items())]
-        draw_curve_box(surf, fonts, box, name, var.lo, var.hi, curves, inputs[name])
-        if name == selected:
-            pygame.draw.rect(surf, C.COLOR_CHEESE, box, 2, border_radius=6)
-    out = system.output
-    box = pygame.Rect(rect.x + 14, rect.y + 212, rect.w - 28, 170)
-    curves = [(s, mf, MODE_COLORS.get(s, C.COLOR_ACCENT)) for s, mf in out.sets.items()]
-    draw_curve_box(surf, fonts, box, f"{out.name}: clipped rules, max-aggregated", out.lo, out.hi,
-                   curves, res.centroid, res.aggregated)
-    y = box.bottom + 12
-    text(surf, fonts.normal, "Rules (strength = min of antecedents)", (rect.x + 14, y))
-    y += 26
-    for rid, ante, out_set in system.rules:
-        st = res.rule_strengths[rid]
-        bar = pygame.Rect(rect.x + 14, y + 3, 90, 12)
-        pygame.draw.rect(surf, C.COLOR_PANEL_LINE, bar, border_radius=3)
-        if st > 0:
-            pygame.draw.rect(surf, MODE_COLORS.get(out_set, C.COLOR_ACCENT),
-                             (bar.x, bar.y, max(2, int(bar.w * st)), bar.h), border_radius=3)
-        color = C.COLOR_TEXT if st > 0 else C.COLOR_TEXT_DIM
-        text(surf, fonts.small, f"{st:.2f}  {rid}: {system.rule_text((rid, ante, out_set))}",
-             (bar.right + 10, y), color)
-        y += 20
-    y += 8
-    text(surf, fonts.normal, f"Centroid {res.centroid:.1f}  ->  mode", (rect.x + 14, y + 4))
-    chip(surf, fonts.normal, res.mode, (rect.x + 250, y), MODE_COLORS.get(res.mode, C.COLOR_ACCENT))
-
-
-# ------------------------------------------------------------------ menu, help, end
 
 
 def draw_menu(surf: pygame.Surface, fonts: Fonts, actions: list[str], options: list[str],
@@ -574,8 +462,8 @@ HELP_STEPS = [
 ]
 HELP_KEYS = [
     "WASD / arrows move, Space wait, Q set a mouse trap, E whistle Bruno back, P pause, Esc menu.",
-    "Human games hide the AI's plans and fuzzy inputs. Watch AI vs AI for Tab path,",
-    "E explored cells, F fuzzy panel, N single step, + / - speed, T save AI traces.",
+    "Human games hide the AI's plans. Watch AI vs AI for Tab path, E explored cells,",
+    "N single step, + / - speed, T save AI traces. Tom and Jerry use Minimax and MCTS.",
 ]
 
 

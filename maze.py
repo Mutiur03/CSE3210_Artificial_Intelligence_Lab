@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from functools import cached_property
 
 import config as C
-from search import Cell, bfs_distance_map, dead_end_cells, reachable
+from search import Cell, bfs_distance_map, core_cells, dead_end_cells, reachable
 
 INF = 10**9
 
@@ -98,7 +98,7 @@ def carve_dfs(size: int, rng: random.Random) -> set[Cell]:
             stack.pop()
             continue
         nr, nc = rng.choice(options)
-        floor.add(((r + nr) // 2, (c + nc) // 2))  # the wall between
+        floor.add(((r + nr) // 2, (c + nc) // 2))
         floor.add((nr, nc))
         stack.append((nr, nc))
     return floor
@@ -124,9 +124,13 @@ def add_loops(floor: set[Cell], size: int, rng: random.Random) -> int:
     return count
 
 
-def _place(cells: list[Cell], adj: dict[Cell, tuple[Cell, ...]], size: int,
+def _place(cells: list[Cell], adj: dict[Cell, tuple[Cell, ...]], core: set[Cell],
            rng: random.Random) -> dict | None:
-    """Try to place starts, keys, exit, kennel. Returns a dict or None on failure."""
+    """Try to place starts, keys, exit, kennel. Returns a dict or None on failure.
+
+    Keys go only on `core` cells (search.core_cells): never in a dead-end pocket,
+    so Jerry always has a second way out of a key cell.
+    """
     jerry = rng.choice(cells)
     jerry_map = bfs_distance_map(adj, jerry)
     far = [p for p in cells if jerry_map.get(p, INF) >= C.MIN_START_DISTANCE]
@@ -138,7 +142,7 @@ def _place(cells: list[Cell], adj: dict[Cell, tuple[Cell, ...]], size: int,
     keys: list[Cell] = []
     key_maps: list[dict[Cell, int]] = []
     for cand in pool:
-        if all(m.get(cand, INF) >= C.MIN_KEY_SEPARATION for m in key_maps):
+        if cand in core and all(m.get(cand, INF) >= C.MIN_KEY_SEPARATION for m in key_maps):
             keys.append(cand)
             key_maps.append(bfs_distance_map(adj, cand))
             if len(keys) == C.NUM_KEYS:
@@ -189,9 +193,10 @@ def generate_maze(seed: int, size: int = C.DEFAULT_SIZE) -> Maze:
         floor = frozenset(floor_set)
         cells = sorted(floor)
         adj = {cell: neighbours(floor, cell) for cell in floor}
+        core = core_cells(adj)
         spot = None
-        for _ in range(C.PLACEMENT_TRIES):  # re-place on the same maze before re-carving
-            spot = _place(cells, adj, size, rng)
+        for _ in range(C.PLACEMENT_TRIES):
+            spot = _place(cells, adj, core, rng)
             if spot is not None:
                 break
         if spot is None:

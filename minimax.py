@@ -1,4 +1,4 @@
-"""Minimax with alpha-beta pruning for close-range tactics (CLAUDE.md 4.6).
+"""Minimax with alpha-beta pruning: the MINIMAX agent's move every turn (CLAUDE.md 4.6).
 
 The game tree is a local sub-game built from the agent's own observation
 (game.belief_state). Plies alternate between the two characters; Tom is MAX,
@@ -15,9 +15,11 @@ No pygame here.
 
 from __future__ import annotations
 
+import itertools
 import math
 import time
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass, field, replace
 
 import config as C
 from game import TOM, GameState, apply_action, end_of_round, legal_actions, other
@@ -47,34 +49,91 @@ class MinimaxResult:
     trace: dict | None = None
 
 
-def _goal(state: GameState) -> Cell | None:
-    """Jerry's goal: nearest remaining key by path distance, else the exit if open and known."""
+@dataclass(frozen=True)
+class Tune:
+    """Fuzzy-mode adjustment of the evaluation: factors on the distance, goal, escape and
+    Bruno terms, and an optional goal cell for Jerry (e.g. the kennel). Default = no change."""
+
+    dist: float = 1.0
+    goal: float = 1.0
+    escape: float = 1.0
+    bruno: float = 1.0
+    goal_cell: Cell | None = None
+    aim: Cell | None = None  # Tom's interception cell: the evaluation rewards being near it
+    aim_w: float = 0.0  # weight per step of d(Tom, aim) (negative = closer is better)
+    key_w: float = C.W_KEYS  # value of one collected key, set per decision (with_key_weight)
+
+
+def _goal(state: GameState, tune: Tune = Tune()) -> Cell | None:
+    """Jerry's goal: nearest remaining key she reaches before Tom (else the nearest), else the
+    exit if open and known
+    (a mode may override it with `tune.goal_cell`)."""
+    if tune.goal_cell is not None:
+        return tune.goal_cell
     if state.keys:
-        return min(state.keys, key=lambda k: state.maze.dist(state.jerry, k))
+        m = state.maze  # a key Tom reaches first is a trap: prefer the nearest key she wins
+        safe = [k for k in state.keys if m.dist(state.jerry, k) < m.dist(state.tom, k)]
+        return min(safe or state.keys, key=lambda k: m.dist(state.jerry, k))
     return state.exit if state.exit_open else None
 
 
-def evaluate(state: GameState) -> tuple[float, dict]:
+def key_weight(maze_dist, keys: Iterable[Cell], exit_cell: Cell | None,
+               goal_factor: float = 1.0) -> float:
+    """Value of one collected key (Tom's view, negative = good for Jerry).
+
+    W_KEYS plus the largest jump of the goal term a collection can cause: after a
+    key Jerry stands on a key cell and her goal moves to another remaining key or
+    the exit, at most `span` steps away (longest path between two of those cells).
+    Without this, a mode that scales the goal term (SNEAK x3) made a far next key
+    cost more than the key was worth, and Jerry hovered next to a key forever.
+    `maze_dist(a, b)` = path distance.
+    """
+    cells = [*keys, *([exit_cell] if exit_cell is not None else [])]
+    span = max((maze_dist(a, b) for a, b in itertools.combinations(cells, 2)), default=0)
+    return C.W_KEYS - goal_factor * C.W_GOAL * span
+
+
+def with_key_weight(state: GameState, tune: Tune) -> Tune:
+    """`tune` with `key_w` fixed from the root position, so every leaf of one search
+    values a key the same. Called by `decide` and `root_moves`."""
+    return replace(tune, key_w=key_weight(state.maze.dist, state.keys, state.exit, tune.goal))
+
+
+def evaluate(state: GameState, tune: Tune = Tune()) -> tuple[float, dict]:
     """Static evaluation from Tom's view (weights in config.py, formula in CLAUDE.md 4.6).
 
-    E = -10*d(Tom,Jerry) + 2*d(Jerry,goal) - 3*escape_routes(Jerry)
+    E = -10*near + -1*far + 2*d(Jerry,goal) + key_weight*keys_taken - 3*escape_routes(Jerry)
         - 15*bruno_guard_near_tom - 8*tom_stun + 5*[Jerry in a dead end]
+    near = min(d(Tom,Jerry), 8), far = the rest: beyond 8 steps the threat fades, so
+    a Jerry far from Tom walks to her keys instead of only running away, while Tom
+    still has a (weaker) pull toward her.
     escape_routes = Jerry's neighbour cells that Tom cannot reach in one step
-    (d(Tom, cell) > d(Jerry, cell) = 1).
+    (d(Tom, cell) > d(Jerry, cell) = 1). Escape routes and the dead-end term only
+    matter while Tom is within NEAR_DIST; farther away escape counts as the maximum 4
+    and dead ends are free, else Jerry would never walk into a dead end for a key.
     """
     m, b = state.maze, state.bruno
-    goal = _goal(state)
+    goal = _goal(state, tune)
+    dist = m.dist(state.tom, state.jerry)
+    threat = dist <= C.NEAR_DIST
     terms = {
-        "dist": m.dist(state.tom, state.jerry),
+        "dist": dist,
         "goal": m.dist(state.jerry, goal) if goal is not None else 0,
-        "escape": sum(1 for n in m.adj[state.jerry] if m.dist(state.tom, n) > 1),
+        "keys": state.keys_taken,
+        "escape": sum(1 for n in m.adj[state.jerry] if m.dist(state.tom, n) > 1) if threat else 4,
         "bruno_near": int(b is not None and b.state in ("GUARD", "CHASE_CAT")
                           and m.dist(b.pos, state.tom) <= C.BRUNO_CHASE_TRIGGER_DIST),
         "stun": state.tom_stun,
-        "dead_end": int(state.jerry in m.dead_ends),
+        "dead_end": int(threat and state.jerry in m.dead_ends),
     }
-    value = (C.W_DIST * terms["dist"] + C.W_GOAL * terms["goal"] + C.W_ESCAPE * terms["escape"]
-             + C.W_BRUNO_NEAR * terms["bruno_near"] + C.W_STUN * terms["stun"]
+    near = min(dist, C.NEAR_DIST)
+    if tune.aim is not None:
+        terms["aim"] = m.dist(state.tom, tune.aim)
+    value = (tune.aim_w * terms.get("aim", 0)
+             + tune.dist * (C.W_DIST * near + C.W_DIST_FAR * (dist - near))
+             + tune.key_w * terms["keys"] + tune.goal * C.W_GOAL * terms["goal"]
+             + tune.escape * C.W_ESCAPE * terms["escape"]
+             + tune.bruno * C.W_BRUNO_NEAR * terms["bruno_near"] + C.W_STUN * terms["stun"]
              + C.W_DEAD_END * terms["dead_end"])
     return value, terms
 
@@ -113,8 +172,8 @@ class _Search:
     """One fixed-depth search. alphabeta=False gives plain minimax."""
 
     def __init__(self, depth: int, alphabeta: bool, node_cap: int | None,
-                 deadline: float | None, record: bool) -> None:
-        self.depth, self.alphabeta = depth, alphabeta
+                 deadline: float | None, record: bool, tune: Tune = Tune()) -> None:
+        self.depth, self.alphabeta, self.tune = depth, alphabeta, tune
         self.node_cap, self.deadline = node_cap, deadline
         self.nodes = 0
         self.tree: list[dict] | None = [] if record else None
@@ -146,7 +205,7 @@ class _Search:
             terms = {"terminal": "capture" if state.winner == TOM else "escape"}
             pv: list = []
         elif ply == self.depth:
-            val, terms = evaluate(state)
+            val, terms = evaluate(state, self.tune)
             pv = []
         else:
             val, terms, pv = self._expand(state, player, ply, alpha, beta, node)
@@ -213,22 +272,23 @@ def alphabeta(state: GameState, player: str, depth: int = C.MINIMAX_DEPTH) -> Mi
     What: alpha = best value MAX can already force, beta = best value MIN can
     already force. When alpha >= beta at a node, the remaining siblings cannot
     change the result and are skipped. Same value as plain minimax, fewer nodes.
-    Where used: HARD / NIGHTMARE close-range tactics through `decide`.
+    Where used: the MINIMAX agents (Tom or Jerry) every turn, through `decide`.
     """
     return _run(state, player, depth, alphabeta_on=True)[0]
 
 
 def decide(state: GameState, player: str, depth: int = C.MINIMAX_DEPTH,
            node_cap: int = C.MINIMAX_NODE_CAP, time_limit_ms: float | None = None,
-           trace: bool = False) -> MinimaxResult:
+           trace: bool = False, tune: Tune = Tune()) -> MinimaxResult:
     """Iterative-deepening alpha-beta: search depth 1, 2, ..., `depth`.
 
-    Where used: TomAgent / JerryAgent (HARD+) when the opponent is visible within
-    path distance 4, and the minimax view of the algorithm demo. Node cap (and
+    Where used: every move of a MINIMAX agent (agents.AIAgent), and the minimax
+    view of the algorithm demo. Node cap (and
     a time limit as safety net) stop an iteration; the last completed depth wins.
     `nodes` counts every node of every iteration.
     """
     t0 = time.perf_counter()
+    tune = with_key_weight(state, tune)
     deadline = t0 + time_limit_ms / 1000 if time_limit_ms else None
     best: MinimaxResult | None = None
     best_tree: list[dict] | None = None
@@ -237,7 +297,7 @@ def decide(state: GameState, player: str, depth: int = C.MINIMAX_DEPTH,
         # depth 1 always runs to completion so there is always a move
         limited = d > 1
         s = _Search(d, True, node_cap - total if limited else None,
-                    deadline if limited else None, trace)
+                    deadline if limited else None, trace, tune)
         try:
             val, terms, pv = s.value(state, player, 0, -math.inf, math.inf, None, None)
         except _Limit:
@@ -268,7 +328,8 @@ class RootMove:
     pv: list[tuple[str, str, Cell, Cell]]
 
 
-def root_moves(state: GameState, player: str, depth: int = C.MINIMAX_DEPTH) -> list[RootMove]:
+def root_moves(state: GameState, player: str, depth: int = C.MINIMAX_DEPTH,
+               tune: Tune = Tune()) -> list[RootMove]:
     """Search every root action with a full alpha-beta window, so each value is exact.
 
     `decide` only bounds the moves it prunes; this gives the true value, principal
@@ -276,8 +337,9 @@ def root_moves(state: GameState, player: str, depth: int = C.MINIMAX_DEPTH) -> l
     scenario report. Where used: scenario.py.
     """
     out = []
+    tune = with_key_weight(state, tune)
     for action, child in children(state, player):
-        s = _Search(depth, True, None, None, False)
+        s = _Search(depth, True, None, None, False, tune)
         val, terms, pv = s.value(child, other(player), 1, -math.inf, math.inf, None, action)
         out.append(RootMove(action, val, s.nodes, terms, [(player, action, child.tom,
                                                           child.jerry)] + pv))

@@ -1,9 +1,9 @@
 """Algorithm demo screen (CLAUDE.md section 5).
 
-Keys 1..8 pick an algorithm: 1 A*, 2 Greedy, 3 DFS, 4 DLS, 5 Bidirectional,
-6 Minimax alpha-beta, 7 MCTS, 8 Fuzzy. Left click = start (Jerry), right click =
-goal (Tom). Space play/pause, +/- speed, R reset, C compare A* vs greedy, Esc back
-(handled by main.App). Every number comes from the same functions the agents call.
+Keys 1..2 pick an algorithm: 1 Minimax alpha-beta, 2 MCTS. Left click = Jerry's
+cell (S), right click = Tom's cell (G). Up/Down change the MCTS sighting age.
+Esc back (handled by main.App). Every number comes from the same functions the
+agents call.
 """
 
 from __future__ import annotations
@@ -16,126 +16,57 @@ import config as C
 import minimax
 import render3d
 import ui
-from agents import TomAgent, evade_plan
-from fuzzy import FuzzyResult, FuzzySystem, JerryController, TomController
+from agents import MCTS, AIAgent
 from game import TOM, GameState, make_observation, new_game
 from maze import Maze
 from mcts import MCTSResult, mcts, opponent_cells
-from search import (
-    BidirResult,
-    Cell,
-    DLSResult,
-    SearchResult,
-    astar,
-    bidirectional_bfs,
-    dfs,
-    dls,
-    greedy_best_first,
-)
 
-ALGOS = {1: "A*", 2: "Greedy best-first", 3: "DFS", 4: "Depth-limited (DLS)",
-         5: "Bidirectional BFS", 6: "Minimax alpha-beta", 7: "MCTS", 8: "Fuzzy logic"}
-SPEEDS = (5, 10, 20, 40, 80, 160)  # animation cells per second
-YELLOW, MAGENTA, RED = (0xF4, 0xD0, 0x3F), (0xE0, 0x40, 0xFB), (0xE7, 0x4C, 0x3C)
-ORANGE = (0xF3, 0x8B, 0x2A)
+ALGOS = {1: "Minimax alpha-beta", 2: "MCTS"}
+MAGENTA = (0xE0, 0x40, 0xFB)
 PANEL = pygame.Rect(C.PANEL_X, C.TOP_BAR_H, C.PANEL_W, C.WINDOW_H - C.TOP_BAR_H)
 
 
-def frontier(maze: Maze, expanded: list[Cell]) -> list[Cell]:
-    """Generated-but-not-expanded cells after `expanded` (exact for BFS/DFS/A*/greedy:
-    each expands every free neighbour)."""
-    done = set(expanded)
-    return list(dict.fromkeys(n for c in expanded for n in maze.adj[c] if n not in done))
-
-
 class Demo:
-    """State of the demo screen. `update` advances the animation, `draw` renders."""
+    """State of the demo screen. `draw` renders the selected algorithm's result."""
 
     def __init__(self, maze: Maze, fonts: ui.Fonts, seed: int) -> None:
         self.maze, self.fonts, self.seed = maze, fonts, seed
         self.algo = 1
         self.start, self.goal = maze.jerry_start, maze.tom_start
-        self.speed = 2
-        self.playing = True
-        self.progress = 0.0
-        self.compare = False
-        self.dls_limit = C.DLS_DEPTH
         self.mcts_age = 3
         self.mcts_iters = C.MCTS_ITERATIONS
         self.reveal: int | None = None  # minimax: nodes shown so far (None = whole tree)
         self.caption = ""  # situation text for videos, shown in the top bar
         self.scene: GameState | None = None
-        self.tom_first = False  # S is Tom and G is Jerry (Tom hunting / ambushing)
-        self.controllers: dict[str, FuzzySystem] = {"TOM": TomController(),
-                                                    "JERRY": JerryController()}
-        self.fz_role = "TOM"
-        self.fz_inputs = {"TOM": {"dist": 6.0, "age": 2.0, "bruno": 0.0},
-                          "JERRY": {"danger": 5.0, "keys_left": 2.0, "bruno_ready": 1.0}}
-        self.fz_sel = 0
         self.compute()
 
-    # ---------------------------------------------------------- model
     def compute(self) -> None:
-        """Run the selected algorithm on the current start/goal (with traces)."""
+        """Run the selected algorithm on the current Jerry (S) / Tom (G) cells."""
         m, s, g = self.maze, self.start, self.goal
-        self.progress = 0.0
         self.scene = None
-        self.res: SearchResult | None = None
-        self.res2: SearchResult | None = None
-        self.order: list[Cell] = []
-        if self.compare:
-            self.res = astar(m.adj, s, g, trace=True)
-            self.res2 = greedy_best_first(m.adj, s, g, trace=True)
-            self.order = self.res.explored_order
-        elif self.algo == 1:
-            self.res = astar(m.adj, s, g, trace=True)
-        elif self.algo == 2:
-            self.res = greedy_best_first(m.adj, s, g, trace=True)
-        elif self.algo == 3:
-            self.res = dfs(m.adj, s, g, trace=True)
-        elif self.algo == 4:
-            self.dls_res: DLSResult = dls(m.adj, s, lambda c: c == g, self.dls_limit)
-            self.evade = evade_plan(m, s, g)
-            self.order = self.dls_res.explored_order
-        elif self.algo == 5:
-            self.bidir: BidirResult = bidirectional_bfs(m.adj, s, g, trace=True)
-            dist_s, dist_g = m.dist_map(s), m.dist_map(g)
-            fwd = [(2 * dist_s[c], 0, c) for c in self.bidir.forward_order]
-            bwd = [(2 * dist_g[c] + 1, 1, c) for c in self.bidir.backward_order]
-            # layers alternate forward, backward, forward ... exactly as the search ran
-            self.bidir_seq = [(side, c) for _, side, c in sorted(fwd + bwd, key=lambda t: t[0])]
-            self.order = [c for _, c in self.bidir_seq]
-        elif self.algo == 6:
+        if self.algo == 1:
             state = new_game(m)
             state.jerry, state.tom = s, g
             state.keys = tuple(k for k in state.keys if k != s)
             state.last_seen = {"JERRY": None, "TOM": None}
             self.mm = minimax.decide(state, TOM, trace=True)
-        elif self.algo == 7:
+        else:
             state = new_game(m)
             state.jerry, state.tom, state.turn = s, g, 10
             obs = make_observation(state, TOM)
-            tom = TomAgent("NIGHTMARE", self.seed)
+            tom = AIAgent(TOM, MCTS, self.seed)
             tom.last_seen = (s, state.turn - self.mcts_age)
             self.mcts_targets = tom.mcts_targets(obs)
             self.mcts_cells = opponent_cells(obs, tom.last_seen)
             self.mc: MCTSResult = mcts(obs, self.mcts_targets, self.mcts_cells,
                                        random.Random(self.seed), self.mcts_iters, trace=True)
-        if self.res is not None and not self.order:
-            self.order = self.res.explored_order
 
-    def fuzzy(self) -> tuple[FuzzySystem, dict[str, float], FuzzyResult]:
-        system = self.controllers[self.fz_role]
-        inputs = self.fz_inputs[self.fz_role]
-        return system, inputs, system.evaluate(inputs, trace=True)
-
-    # ---------------------------------------------------------- input
     def handle(self, ev: pygame.event.Event) -> None:
         if ev.type == pygame.KEYDOWN:
             self.key(ev.key)
-        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button in (1, 3) and not self.compare:
+        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button in (1, 3):
             cell = self.geometry().cell_at(ev.pos, self.maze)
-            if cell is not None and self.algo != 8:
+            if cell is not None:
                 if ev.button == 1:
                     self.start = cell
                 else:
@@ -144,85 +75,32 @@ class Demo:
 
     def geometry(self) -> ui.Geometry:
         """Where the clickable map is: a small map under the minimax tree, else the board."""
-        if self.algo == 6 and not self.compare:
+        if self.algo == 1:
             return ui.board_geometry(self.maze, pygame.Rect(16, 420, 290, 290))
         return ui.board_geometry(self.maze)
 
     def key(self, key: int) -> None:
-        num = {getattr(pygame, f"K_{i}"): i for i in range(1, 9)}
-        num.update({getattr(pygame, f"K_KP{i}"): i for i in range(1, 9)})
+        num = {pygame.K_1: 1, pygame.K_2: 2, pygame.K_KP1: 1, pygame.K_KP2: 2}
         if key in num:
-            self.algo, self.compare = num[key], False
+            self.algo = num[key]
             self.compute()
-        elif key == pygame.K_SPACE:
-            self.playing = not self.playing
-        elif key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
-            self.speed = min(len(SPEEDS) - 1, self.speed + 1)
-        elif key in (pygame.K_MINUS, pygame.K_KP_MINUS):
-            self.speed = max(0, self.speed - 1)
-        elif key == pygame.K_r:
-            self.progress = 0.0
-            self.playing = True
-        elif key == pygame.K_c:
-            self.compare = not self.compare
+        elif self.algo == 2 and key in (pygame.K_UP, pygame.K_DOWN):
+            self.mcts_age = max(0, self.mcts_age + (1 if key == pygame.K_UP else -1))
             self.compute()
-        elif key == pygame.K_TAB and self.algo == 8:
-            self.fz_role = "JERRY" if self.fz_role == "TOM" else "TOM"
-            self.fz_sel = 0
-        elif key in (pygame.K_UP, pygame.K_DOWN):
-            self.adjust(-1 if key == pygame.K_UP else 1, vertical=True)
-        elif key in (pygame.K_LEFT, pygame.K_RIGHT):
-            self.adjust(-1 if key == pygame.K_LEFT else 1, vertical=False)
 
-    def adjust(self, d: int, vertical: bool) -> None:
-        """Up/Down: DLS depth limit, MCTS sighting age, fuzzy input selection.
-        Left/Right: fuzzy slider value."""
-        if self.algo == 4 and vertical:
-            self.dls_limit = max(1, self.dls_limit - d)
-            self.compute()
-        elif self.algo == 7 and vertical:
-            self.mcts_age = max(0, self.mcts_age - d)
-            self.compute()
-        elif self.algo == 8:
-            system = self.controllers[self.fz_role]
-            names = list(system.inputs)
-            if vertical:
-                self.fz_sel = (self.fz_sel + d) % len(names)
-            else:
-                var = system.inputs[names[self.fz_sel]]
-                step = (var.hi - var.lo) / (30 if var.hi > 3 else 20)
-                cur = self.fz_inputs[self.fz_role][var.name]
-                self.fz_inputs[self.fz_role][var.name] = round(
-                    min(var.hi, max(var.lo, cur + d * step)), 3)
-
-    def update(self) -> None:
-        if self.playing:
-            self.progress += SPEEDS[self.speed] / C.FPS
-
-    def shown(self) -> int:
-        return min(len(self.order), int(self.progress))
-
-    # ---------------------------------------------------------- drawing
     def draw(self, surf: pygame.Surface) -> None:
         surf.fill(C.COLOR_BG)
         pygame.draw.rect(surf, C.COLOR_PANEL, (0, 0, C.WINDOW_W, C.TOP_BAR_H))
-        name = "Compare A* vs greedy" if self.compare else ALGOS[self.algo]
+        name = ALGOS[self.algo]
         ui.text(surf, self.fonts.big, f"Algorithm demo: {name}", (14, 12))
-        hint = self.caption or ("1 A*  2 Greedy  3 DFS  4 DLS  5 Bidir  6 Minimax  "
-                                "7 MCTS  8 Fuzzy   C compare   Esc back")
+        hint = self.caption or "1 Minimax alpha-beta   2 MCTS   Esc back"
         room = C.WINDOW_W - 28 - 20 - self.fonts.big.size(f"Algorithm demo: {name}")[0]
         ui.text(surf, self.fonts.small, ui.fit(self.fonts.small, hint, room), (C.WINDOW_W - 14, 17),
                 C.COLOR_TEXT_DIM, right=True)
-        if self.compare:
-            self.draw_compare(surf)
-        elif self.algo in (1, 2, 3, 4, 5):
-            self.draw_search(surf)
-        elif self.algo == 6:
+        if self.algo == 1:
             self.draw_minimax(surf)
-        elif self.algo == 7:
-            self.draw_mcts(surf)
         else:
-            self.draw_fuzzy(surf)
+            self.draw_mcts(surf)
 
     def panel(self, surf: pygame.Surface, lines: list[tuple[str, str]], y: int = 0) -> int:
         """Right panel: label/value rows. Returns next y."""
@@ -256,139 +134,11 @@ class Demo:
             return g
         if self.scene is None:
             self.scene = new_game(self.maze, bruno_enabled=False)
-            pair = (self.start, self.goal) if self.tom_first else (self.goal, self.start)
-            self.scene.tom, self.scene.jerry = pair
+            self.scene.tom, self.scene.jerry = self.goal, self.start
         surf.blit(r3d.render(self.scene, True), (C.BOARD_X, C.BOARD_Y))
         ui.draw_tags(surf, self.fonts, r3d)
         return r3d.grid
 
-    def markers(self, surf: pygame.Surface, g: ui.Grid, start_label: str = "S",
-                goal_label: str = "G") -> None:
-        for cell, label, color in ((self.start, start_label, C.COLOR_ACCENT),
-                                   (self.goal, goal_label, RED)):
-            pygame.draw.circle(surf, color, g.center(cell), g.tile // 2 - 2, 3)
-            ui.text(surf, self.fonts.small, label, g.center(cell), C.COLOR_TEXT, center=True)
-
-    def draw_progress(self, surf: pygame.Surface, g: ui.Grid, res: SearchResult,
-                      k: int) -> None:
-        """Explored (blue), frontier (yellow), final path (green) after k expansions."""
-        done = res.explored_order[:k]
-        ui.shade_cells(surf, g, done, C.COLOR_EXPLORED, 110)
-        if k < len(res.explored_order):
-            ui.shade_cells(surf, g, frontier(self.maze, done), YELLOW, 120)
-        else:
-            ui.draw_path(surf, g, res.path)
-
-    def draw_search(self, surf: pygame.Surface) -> None:
-        g = self.board(surf)
-        k = self.shown()
-        finished = k >= len(self.order)
-        lines: list[tuple[str, str]] = [("#", ALGOS[self.algo])]
-        if self.algo in (1, 2, 3):
-            assert self.res is not None
-            self.draw_progress(surf, g, self.res, k)
-            lines += [("Nodes expanded", f"{k} / {self.res.nodes_expanded}"),
-                      ("Path length", str(len(self.res.path) - 1) if finished else "..."),
-                      ("Time", f"{self.res.ms:.3f} ms")]
-            steps = (self.res.trace or {}).get("steps", [])
-            if self.algo in (1, 2) and steps:
-                st = steps[max(0, min(k, len(steps)) - 1)]
-                lines += [("#", f"expansion {st['n']}"), ("Cell", str(tuple(st["expand"]))),
-                          ("g / h / f", f"{st['g']:g} / {st['h']} / {st['f']:g}"),
-                          ("Open list", f"{st['open_size']} cells"),
-                          ("", "top: " + "  ".join(f"{tuple(c)} f={f:g}"
-                                                   for c, f in st["open_top"][:3]))]
-        elif self.algo == 4:
-            r = self.dls_res
-            done = r.explored_order[:k]
-            ui.shade_cells(surf, g, done, C.COLOR_EXPLORED, 110)
-            if finished:
-                ui.shade_cells(surf, g, r.cutoff_cells, RED, 150)
-                ui.draw_path(surf, g, r.path)
-                ui.draw_path(surf, g, self.evade.best_path, MAGENTA)
-            ev = self.evade.trace
-            lines += [("Depth limit", f"{self.dls_limit}  (Up/Down)"),
-                      ("Status", r.status if finished else "..."),
-                      ("Nodes", f"{k} / {r.nodes_expanded}"),
-                      ("Cutoff cells", f"{len(r.cutoff_cells)} (red)"),
-                      ("#", "Jerry EVADE: dls_safe_paths, Tom at G"),
-                      ("Paths of 5 steps", str(ev["paths_enumerated"])),
-                      ("Safe paths", str(ev["safe_paths"])),
-                      ("Cutoff / dead end", f"{ev['cutoffs']} / {ev['dead_ends']}"),
-                      ("Best score", f"{ev['best_score']:.1f}" if ev["best_score"] is not None
-                       else "none: flee"),
-                      ("", "best safe path in magenta")]
-        else:
-            b = self.bidir
-            fwd = [c for side, c in self.bidir_seq[:k] if side == 0]
-            bwd = [c for side, c in self.bidir_seq[:k] if side == 1]
-            ui.shade_cells(surf, g, fwd, C.COLOR_EXPLORED, 120)
-            ui.shade_cells(surf, g, bwd, ORANGE, 120)
-            if finished:
-                ui.draw_path(surf, g, b.path)
-                if b.meeting is not None:
-                    ui.shade_cells(surf, g, [b.meeting], MAGENTA, 220)
-            else:
-                ui.shade_cells(surf, g, frontier(self.maze, fwd), C.COLOR_EXPLORED, 60)
-                ui.shade_cells(surf, g, frontier(self.maze, bwd), ORANGE, 60)
-            lines += [("Nodes", f"{k} / {b.nodes_expanded}"),
-                      ("Fwd / bwd nodes", f"{len(b.forward_order)} / {len(b.backward_order)}"),
-                      ("Meeting cell", str(b.meeting) if finished else "..."),
-                      ("Path length", str(len(b.path) - 1) if finished else "..."),
-                      ("Time", f"{b.ms:.3f} ms"),
-                      ("", "forward wave blue, backward orange, meeting magenta")]
-        self.markers(surf, g)
-        lines += [("#", "controls"), ("", "Left click start S, right click goal G"),
-                  ("", f"Space {'pause' if self.playing else 'play'}, +/- speed "
-                       f"({SPEEDS[self.speed]} cells/s), R reset")]
-        self.panel(surf, lines)
-        if self.algo == 5:
-            keys = [(C.COLOR_EXPLORED, "forward"), (ORANGE, "backward"), (MAGENTA, "meeting"),
-                    (C.COLOR_PATH, "path")]
-        elif self.algo == 4:
-            keys = [(C.COLOR_EXPLORED, "explored"), (RED, "cutoff"), (C.COLOR_PATH, "path"),
-                    (MAGENTA, "evade path")]
-        else:
-            keys = [(C.COLOR_EXPLORED, "explored"), (YELLOW, "frontier"), (C.COLOR_PATH, "path")]
-        self.legend(surf, keys)
-
-    def legend(self, surf: pygame.Surface, keys: list[tuple[ui.Color, str]]) -> None:
-        x, y = PANEL.x + 18, C.WINDOW_H - 34
-        for color, label in keys:
-            pygame.draw.rect(surf, color, (x, y + 2, 14, 14))
-            x = ui.text(surf, self.fonts.small, label, (x + 20, y)).right + 16
-
-    def draw_compare(self, surf: pygame.Surface) -> None:
-        assert self.res is not None and self.res2 is not None
-        k = int(self.progress)
-        rows = []
-        for i, (res, label) in enumerate(((self.res, "A*"), (self.res2, "Greedy best-first"))):
-            side = 538
-            area = pygame.Rect((C.WINDOW_W - 2 * side - 16) // 2 + i * (side + 16),
-                               C.TOP_BAR_H + 28, side, side)
-            g = ui.board_geometry(self.maze, area)
-            ui.text(surf, self.fonts.normal, label, (area.x, C.TOP_BAR_H + 6))
-            ui.draw_maze(surf, self.maze, g)
-            self.draw_progress(surf, g, res, min(k, len(res.explored_order)))
-            self.markers(surf, g)
-            rows.append((label, res))
-        y0 = C.TOP_BAR_H + 576
-        cols = (20, 260, 440, 620, 800)
-        for x, head in zip(cols, ("Algorithm", "Nodes expanded", "Path length", "Time ms",
-                                  "Optimal?"), strict=True):
-            ui.text(surf, self.fonts.small, head, (x, y0), C.COLOR_TEXT_DIM)
-        best = len(self.res.path) - 1
-        for j, (label, res) in enumerate(rows):
-            y = y0 + 26 + j * 26
-            plen = len(res.path) - 1
-            vals = (label, str(res.nodes_expanded), str(plen), f"{res.ms:.3f}",
-                    "yes" if plen == best else f"no (+{plen - best})")
-            for x, v in zip(cols, vals, strict=True):
-                ui.text(surf, self.fonts.normal, v, (x, y))
-        ui.text(surf, self.fonts.small, "Same maze, start and goal.  C back, Space pause, R replay",
-                (C.WINDOW_W - 20, C.WINDOW_H - 22), C.COLOR_TEXT_DIM, right=True)
-
-    # ---- minimax tree
     def draw_minimax(self, surf: pygame.Surface) -> None:
         tr = self.mm.trace or {}
         tree = [n for n in tr.get("tree", []) if n["ply"] <= 2][:40]
@@ -424,7 +174,7 @@ class Demo:
         for n in tree:
             x, _ = pos[n["id"]]
             pos[n["id"]] = (x, ys[n["ply"]])
-        shown = {n["id"] for n in tree[:self.reveal]}  # [:None] = every node
+        shown = {n["id"] for n in tree[:self.reveal]}
         tree = [n for n in tree if n["id"] in shown]
         for n in tree:
             if n["parent"] is None:
@@ -478,7 +228,6 @@ class Demo:
             ui.text(surf, self.fonts.small, ui.fit(self.fonts.small, row, C.WINDOW_W - x - 20),
                     (x, 436 + i * 28), C.COLOR_TEXT if i < 5 else C.COLOR_TEXT_DIM)
 
-    # ---- MCTS
     def draw_mcts(self, surf: pygame.Surface) -> None:
         g = self.board(surf)
         mc = self.mc
@@ -524,31 +273,6 @@ class Demo:
                            ("", "far. Right-click Tom closer to see the bars differ.")]
         self.panel(surf, help_lines, y)
 
-    # ---- fuzzy sliders
-    def draw_fuzzy(self, surf: pygame.Surface) -> None:
-        system, inputs, res = self.fuzzy()
-        names = list(system.inputs)
-        ui.draw_fuzzy_view(surf, self.fonts, pygame.Rect(0, C.TOP_BAR_H, C.BOARD_PX, C.BOARD_PX),
-                           system, inputs, res, names[self.fz_sel])
-        lines: list[tuple[str, str]] = [("#", f"{system.role.title()} inputs (Tab: other side)")]
-        y = self.panel(surf, lines)
-        x = PANEL.x + 18
-        for i, name in enumerate(names):
-            var = system.inputs[name]
-            sel = i == self.fz_sel
-            ui.text(surf, self.fonts.normal, f"{name} = {inputs[name]:g}", (x, y),
-                    C.COLOR_CHEESE if sel else C.COLOR_TEXT)
-            track = pygame.Rect(x, y + 26, PANEL.w - 36, 6)
-            pygame.draw.rect(surf, C.COLOR_PANEL_LINE, track, border_radius=3)
-            kx = track.x + int((inputs[name] - var.lo) / (var.hi - var.lo) * track.w)
-            pygame.draw.circle(surf, C.COLOR_CHEESE if sel else C.COLOR_ACCENT,
-                               (kx, track.centery), 8)
-            y += 52
-        y = self.panel(surf, [("#", "result"), ("Centroid", f"{res.centroid:.1f}"),
-                              ("Mode", res.mode)], y + 4)
-        y = ui.fuzzy_bars(surf, self.fonts, x, y + 4, PANEL.w - 36, res)
-        self.panel(surf, [("#", "controls"), ("", "Up/Down pick input, Left/Right change it"),
-                          ("", "Tab: Tom / Jerry controller")], y + 8)
 
 
 def _short(v: float | str) -> str:

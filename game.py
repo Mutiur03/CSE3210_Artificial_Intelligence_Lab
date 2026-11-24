@@ -18,7 +18,7 @@ TOM = "TOM"
 ROLES = (JERRY, TOM)
 SLEEP, GUARD, CHASE_CAT, TIRED = "SLEEP", "GUARD", "CHASE_CAT", "TIRED"
 BRUNO_STATES = (SLEEP, GUARD, CHASE_CAT, TIRED)
-TRAP, WHISTLE = "TRAP", "WHISTLE"  # Jerry's gadgets (use_gadget)
+TRAP, WHISTLE = "TRAP", "WHISTLE"
 
 
 @dataclass(frozen=True)
@@ -108,7 +108,6 @@ class Observation:
     maze: Maze
 
 
-# ------------------------------------------------------------------ setup
 
 
 def new_game(maze: Maze, bruno_enabled: bool = True) -> GameState:
@@ -157,7 +156,6 @@ def legal_actions(state: GameState, role: str) -> list[str]:
     return moves_from(state.maze, pos_of(state, role))
 
 
-# ------------------------------------------------------------------ helpers
 
 
 def _witnesses(state: GameState, cell: Cell, *always: str) -> frozenset[str]:
@@ -195,7 +193,6 @@ def toward(maze: Maze, src: Cell, goal: Cell) -> Cell:
     return next(n for n in maze.adj[src] if dmap[n] == dmap[src] - 1)
 
 
-# ------------------------------------------------------------------ actions
 
 
 def apply_action(state: GameState, role: str, action: str) -> list[Event]:
@@ -297,7 +294,6 @@ def _jerry_lands(state: GameState, out: list[Event]) -> None:
               _witnesses(state, b.pos, JERRY))
 
 
-# ------------------------------------------------------------------ Bruno FSM
 
 
 def bruno_step(state: GameState) -> list[Event]:
@@ -305,8 +301,10 @@ def bruno_step(state: GameState) -> list[Event]:
 
     SLEEP: stays in the kennel. GUARD: follows Jerry (stays within 2); switches to
     CHASE_CAT if an unstunned Tom is within path distance 3. CHASE_CAT: steps
-    toward Tom, bites when adjacent and cooldown is 0 (Tom stun 3), gives up when
-    Tom is farther than 5. TIRED: walks back to the kennel.
+    toward Tom, gives up when Tom is farther than 5. TIRED: walks back to the kennel.
+    Bite (every awake state, GUARD, CHASE_CAT and TIRED alike): after his step, Tom on
+    his cell or next to it, bite cooldown 0 and Tom not already stunned = Tom stunned 3
+    turns. A Bruno walking home still bites a Tom he runs into.
     """
     b, out = state.bruno, []
     if b is None or state.winner is not None:
@@ -320,21 +318,22 @@ def bruno_step(state: GameState) -> list[Event]:
     if b.state == CHASE_CAT:
         if maze.dist(b.pos, state.tom) > C.BRUNO_BITE_RANGE:
             b.pos = toward(maze, b.pos, state.tom)
-        d = maze.dist(b.pos, state.tom)
-        if d <= C.BRUNO_BITE_RANGE and b.bite_cooldown == 0:
-            state.tom_stun = C.BRUNO_BITE_STUN
-            b.bite_cooldown = C.BRUNO_BITE_COOLDOWN
-            b.state = GUARD
-            state.bites += 1
-            _emit(state, out, "Bruno bites Tom! Tom stunned 3 turns", _witnesses(state, b.pos, TOM))
-        elif d > C.BRUNO_CHASE_GIVEUP_DIST:
-            b.state = GUARD
-            _emit(state, out, "Bruno lost Tom and returns to Jerry", _witnesses(state, b.pos))
     elif b.state == GUARD:
         if maze.dist(b.pos, state.jerry) > C.BRUNO_GUARD_FOLLOW_DIST:
             b.pos = toward(maze, b.pos, state.jerry)
     elif b.state == TIRED:
         b.pos = toward(maze, b.pos, maze.kennel)
+    if (b.state != SLEEP and b.bite_cooldown == 0 and state.tom_stun == 0
+            and maze.dist(b.pos, state.tom) <= C.BRUNO_BITE_RANGE):
+        state.tom_stun = C.BRUNO_BITE_STUN
+        b.bite_cooldown = C.BRUNO_BITE_COOLDOWN
+        if b.state == CHASE_CAT:
+            b.state = GUARD
+        state.bites += 1
+        _emit(state, out, "Bruno bites Tom! Tom stunned 3 turns", _witnesses(state, b.pos, TOM))
+    elif b.state == CHASE_CAT and maze.dist(b.pos, state.tom) > C.BRUNO_CHASE_GIVEUP_DIST:
+        b.state = GUARD
+        _emit(state, out, "Bruno lost Tom and returns to Jerry", _witnesses(state, b.pos))
     return out
 
 
@@ -398,14 +397,18 @@ def run_round(state: GameState, jerry: Policy, tom: Policy) -> list[Event]:
     return out
 
 
-# ------------------------------------------------------------------ observation
 
 
 def make_observation(state: GameState, role: str) -> Observation:
-    """Fog-of-war view for `role`: vision = BFS path distance <= 5 (walls block)."""
+    """View for `role`. Fog of war: vision = BFS path distance <= 5 (walls block). With
+    C.AI_FULL_INFO every floor cell is visible: both characters and Bruno are always seen.
+    The exit is still unknown to Tom until the alarm (a rule, not fog)."""
     maze = state.maze
     me, opp = pos_of(state, role), pos_of(state, other(role))
-    visible = frozenset(c for c, d in maze.dist_map(me).items() if d <= C.VISION_RADIUS)
+    if C.AI_FULL_INFO:
+        visible = frozenset(maze.floor)
+    else:
+        visible = frozenset(c for c, d in maze.dist_map(me).items() if d <= C.VISION_RADIUS)
     opp_seen = opp in visible
     b = state.bruno
     since = state.turn - C.EVENT_MEMORY_ROUNDS
@@ -451,7 +454,6 @@ def belief_state(obs: Observation, opp_pos: Cell, bruno_activations: int = 0) ->
     )
 
 
-# ------------------------------------------------------------------ ASCII tools
 
 
 _OVERRIDES = {
