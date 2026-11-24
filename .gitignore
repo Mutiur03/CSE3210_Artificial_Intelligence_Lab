@@ -24,3 +24,5 @@ __pycache__/
 !assets/**
 !*.pptx
 !*.pdf
+!docs/**
+!videos/**

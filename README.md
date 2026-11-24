@@ -11,7 +11,25 @@ A turn-based Tom & Jerry maze game built for the **CSE 3210 Artificial Intellige
 
 Tom and Jerry never use the same algorithm in one game. If Tom runs Minimax, Jerry runs MCTS, and the other way round.
 
-Videos of real games are in [videos/](videos). The write-up is in [report/](report) and [Cheese_Heist_Final_Report.pdf](Cheese_Heist_Final_Report.pdf).
+The write-up is in [Cheese_Heist_Final_Report.pdf](Cheese_Heist_Final_Report.pdf), and the presentation slides are in `Cheese Heist AI Lab Final.pptx`.
+
+## Screenshots
+
+Human Jerry vs AI Tom (Minimax), 21x21 board with the 3D renderer:
+
+![Gameplay, seed 190](docs/screens/gameplay-1.png)
+
+![Gameplay, seed 10](docs/screens/gameplay-2.png)
+
+End screen on a 27x27 board (seed 4):
+
+![Tom wins, seed 4](docs/screens/gameplay-3.png)
+
+Recorded games (download or open on GitHub):
+[live gameplay](videos/tom_jerry_live_gameplay.mp4),
+[Jerry escapes](videos/game1_seed10_jerry_escapes.mp4),
+[Bruno bites Tom](videos/game2_seed4_bruno_bites.mp4),
+[Tom captures Jerry](videos/game3_seed14_tom_captures.mp4).
 
 ## Quick start
 
@@ -116,7 +134,7 @@ ui.py          2D drawing: HUD, panels, menu, help, end screen
 render3d.py    3D board renderer (ModernGL, drawn offscreen into pygame)
 config.py      every constant: rules, AI weights, window, palette
 assets/        CC0 glTF models (see assets/LICENSES.md)
-report/        final report (.docx)
+docs/screens/  gameplay screenshots used in this README
 videos/        recorded example games
 ```
 
