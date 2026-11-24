@@ -7,6 +7,7 @@
 
 # needed to install and run the game
 !requirements.txt
+!README.md
 !pyproject.toml
 !Makefile
 !run.sh
@@ -18,3 +19,8 @@
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+
+# assets: 3D models (+ licenses), report, videos, slides
+!assets/**
+!*.pptx
+!*.pdf
